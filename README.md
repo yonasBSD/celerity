@@ -173,7 +173,6 @@ git push origin v0.1.0
 
 ## License
 
-Licensed under either:
+Licensed under:
 
 - MIT
-- Apache-2.0
