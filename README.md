@@ -143,15 +143,6 @@ celerity = { version = "0.1.0", features = ["tokio", "ipc", "curve"] }
 
 At the core is `CelerityPeer`, which owns protocol state but no sockets. The Tokio wrappers in `celerity::io` sit on top when you want real network transport.
 
-## Project Layout
-
-- `src/lib.rs`: public API and shared protocol types
-- `src/peer.rs`: sans-IO ZMTP peer state machine
-- `src/pattern.rs`: `PUB/SUB` and `REQ/REP` coordinators
-- `src/io/`: Tokio transport, endpoint parsing, and socket wrappers
-- `src/security/`: NULL and CURVE-RS mechanisms
-- `src/bin/cel_cat.rs`: small CLI for interactive testing
-
 ## Development
 
 Format and test before pushing:
