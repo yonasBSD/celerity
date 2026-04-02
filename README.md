@@ -58,6 +58,38 @@ Terminal 2:
 cargo run --all-features --bin cel-cat -- pub 127.0.0.1:5555 hello from tcp
 ```
 
+### TCP between your host and a VM on the same network
+
+This is still TCP. It is the right transport when your host machine and a VM need to talk over a real IP address on the same LAN, bridged adapter, or host-only network.
+
+Example with the host publishing and the VM subscribing:
+
+On your host Mac:
+
+```bash
+cargo run --all-features --bin cel-cat -- pub 0.0.0.0:5555 hello from host
+```
+
+On your Kali VM:
+
+```bash
+cargo run --all-features --bin cel-cat -- sub <HOST-IP>:5555
+```
+
+Example with the VM publishing and the host subscribing:
+
+On your Kali VM:
+
+```bash
+cargo run --all-features --bin cel-cat -- pub 0.0.0.0:5555 hello from kali
+```
+
+On your host Mac:
+
+```bash
+cargo run --all-features --bin cel-cat -- sub <VM-IP>:5555
+```
+
 ### IPC on the same machine
 
 `ipc://` uses Unix domain sockets, so both processes must run on the same machine.
@@ -97,6 +129,8 @@ IPC is local-only. It does not travel over Wi-Fi, Ethernet, or between separate 
 For non-loopback TCP, the intended path is CURVE-RS. The library defaults to failing closed for remote `NULL` unless you explicitly opt into insecure mode.
 
 The high-level CLI is meant for local workflows first. For remote hosts, use the library API with an explicit `SecurityConfig::curve()` setup and managed key material.
+
+That means host-to-VM traffic over a real IP is TCP, but it is no longer treated as a local loopback link. If you want that path to be secure and reliable beyond local experiments, use CURVE-RS through the library API rather than relying on plain `NULL`.
 
 ## Using It As a Library
 
