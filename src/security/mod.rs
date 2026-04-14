@@ -103,6 +103,7 @@ pub(crate) fn validate_remote_metadata(
     metadata: &MetadataMap,
 ) -> Result<SocketType, ProtocolError> {
     let peer_socket_type = metadata.socket_type()?;
+    // Socket compatibility is checked after the handshake exposes peer metadata.
     if !config.socket_type.is_compatible_with(peer_socket_type) {
         return Err(ProtocolError::IncompatibleSocketTypes {
             local: config.socket_type,

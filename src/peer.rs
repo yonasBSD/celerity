@@ -40,12 +40,14 @@ impl CelerityPeer {
         let mut terminal_error = None;
         let mut local_metadata = MetadataMap::new();
 
+        // Fail closed up front if the peer cannot produce a valid opening handshake.
         match config
             .validate_policy()
             .and_then(|()| config.handshake_metadata())
         {
             Ok(metadata) => {
                 local_metadata = metadata;
+                // Every peer speaks first with its 64-byte ZMTP greeting.
                 output.push_back(ProtocolAction::Write(encode_greeting(&config)));
             }
             Err(err) => {
@@ -141,6 +143,7 @@ impl CelerityPeer {
             },
         );
 
+        // This bit lets CURVE agree on which side acts as the server half.
         if greeting.as_server != expected_as_server {
             if expected == SecurityMechanism::Null && greeting.as_server != 0 {
                 return self.fail(ProtocolError::InvalidAsServer(greeting.as_server));
@@ -150,6 +153,7 @@ impl CelerityPeer {
             }
         }
 
+        // Once the greeting checks out, the mechanism driver owns the rest.
         self.state = PeerState::Handshake;
         if let Some(complete) =
             self.mechanism
@@ -180,6 +184,7 @@ impl CelerityPeer {
         body: Bytes,
     ) -> Result<(), ProtocolError> {
         if flags.contains(FrameFlags::COMMAND) {
+            // Control frames cannot interrupt a multipart message already in progress.
             if !self.current_message.is_empty() {
                 return self.fail(ProtocolError::InvalidCommandFrame);
             }
@@ -220,6 +225,7 @@ impl CelerityPeer {
     }
 
     fn process_secure_message(&mut self, payload: Bytes) -> Result<(), ProtocolError> {
+        // CURVE wraps an inner stream of already-encoded ZMTP frames.
         let decrypted = self.mechanism.decode_message(payload)?;
         let mut input = InputBuffer::default();
         input.push(decrypted);
@@ -284,6 +290,7 @@ impl CelerityPeer {
         if flags.contains(FrameFlags::MORE) {
             Ok(())
         } else {
+            // Delivery happens only once we see the final frame of the multipart.
             let message = std::mem::take(&mut self.current_message);
             self.output
                 .push_back(ProtocolAction::Event(PeerEvent::Message(message)));
@@ -293,6 +300,7 @@ impl CelerityPeer {
 
     fn finish_handshake(&mut self, complete: HandshakeComplete) {
         self.state = PeerState::Traffic;
+        // Transports use this event as the point where queued sends may start flowing.
         self.output
             .push_back(ProtocolAction::Event(PeerEvent::HandshakeComplete {
                 peer_socket_type: complete.peer_socket_type,

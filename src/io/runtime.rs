@@ -142,6 +142,7 @@ async fn run_tokio_peer(
     let mut read_buf = BytesMut::with_capacity(READ_BUFFER_CAPACITY);
     let mut pending: VecDeque<QueuedOutbound> = VecDeque::new();
     let mut pending_bytes = 0_usize;
+    // Application sends queue here until the handshake opens the traffic phase.
     let mut ready_for_traffic = false;
     let mut needs_drain = true;
 
@@ -154,6 +155,7 @@ async fn run_tokio_peer(
             }
 
             _ = ready(()), if needs_drain => {
+                // Drain protocol output before taking more input or new commands.
                 needs_drain = false;
                 let drain = pump_peer_actions(&mut peer, &mut stream, &event_tx, hwm).await?;
                 if drain.handshake_completed {
@@ -161,6 +163,7 @@ async fn run_tokio_peer(
                 }
 
                 if ready_for_traffic && !pending.is_empty() {
+                    // Release everything queued once the peer reports handshake completion.
                     while let Some(queued) = pending.pop_front() {
                         pending_bytes = pending_bytes.saturating_sub(queued.bytes);
                         peer.submit(queued.item)?;
@@ -191,6 +194,7 @@ async fn run_tokio_peer(
                             let _ = ack.send(());
                             needs_drain = true;
                         } else if queue_has_headroom(hwm, pending.len(), pending_bytes) {
+                            // Before READY, we queue locally instead of touching the peer state.
                             let bytes = outbound_item_bytes(&item);
                             pending_bytes = pending_bytes.saturating_add(bytes);
                             pending.push_back(QueuedOutbound { item, bytes });
@@ -228,6 +232,7 @@ async fn pump_peer_actions(
     hwm: HwmConfig,
 ) -> Result<DrainState, TokioCelerityError> {
     let mut handshake_completed = false;
+    // Batch consecutive writes so we do not await for every tiny frame.
     let mut writes = Vec::new();
     let mut actions = 0_usize;
     let mut written_bytes = 0_usize;
@@ -245,6 +250,7 @@ async fn pump_peer_actions(
                 writes.push(bytes);
             }
             ProtocolAction::Event(event) => {
+                // Flush pending bytes before surfacing events across an await boundary.
                 if !writes.is_empty() {
                     stream.write_all_vectored(&writes).await?;
                     writes.clear();
@@ -277,6 +283,7 @@ async fn forward_peer_event(
     event: PeerEvent,
     hwm: HwmConfig,
 ) -> Result<(), TokioCelerityError> {
+    // Only message events are droppable; control flow events must always get through.
     if hwm.policy == HwmPolicy::DropNewest && matches!(event, PeerEvent::Message(_)) {
         return match event_tx.try_send(event) {
             Ok(()) => Ok(()),
@@ -380,6 +387,7 @@ fn apply_transport_policy(
                 }
             }
             TransportKind::Ipc => {
+                // IPC NULL can be gated both by policy and filesystem checks.
                 if !config.security.policy.allow_null_ipc && !config.security.allow_insecure_null {
                     return Err(TokioCelerityError::LocalAuth {
                         endpoint: "ipc".to_owned(),

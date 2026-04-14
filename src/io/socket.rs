@@ -74,6 +74,7 @@ impl PubSocket {
         timeout: std::time::Duration,
     ) -> Result<bool, TokioCelerityError> {
         if *self.ready_rx.borrow() > 0 {
+            // Give subscription frames a brief moment to reach the publisher.
             tokio::time::sleep(SUBSCRIPTION_SETTLE_DELAY).await;
             return Ok(true);
         }
@@ -366,6 +367,7 @@ async fn run_pub_socket(
                 match update {
                     Some(PeerUpdate::Event { peer, event }) => {
                         if matches!(event, PeerEvent::HandshakeComplete { .. }) {
+                            // A transport is publish-ready only after the ZMTP handshake finishes.
                             ready_peers.insert(peer);
                             let _ = ready_tx.send(ready_peers.len());
                         }
@@ -394,6 +396,7 @@ async fn dispatch_pub_message(
     for action in pub_core.publish(message)? {
         if let PatternAction::Send { peer, item } = action {
             if let Some(handle) = peers.get(&peer) {
+                // PUB fanout is best-effort; a full peer queue does not stall everyone else.
                 match try_send_runtime_command(&handle.command_tx, &handle.terminal_rx, item).await
                 {
                     Ok(()) | Err(TokioCelerityError::QueueFull) => {}
@@ -538,6 +541,7 @@ async fn drive_req_queue(
     in_flight: &mut Option<oneshot::Sender<Result<Multipart, TokioCelerityError>>>,
 ) -> Result<(), TokioCelerityError> {
     if in_flight.is_some() {
+        // REQ cannot send the next request until the current reply lands.
         return Ok(());
     }
 
@@ -572,6 +576,7 @@ async fn run_rep_socket(
                 let (stream, transport) = accept?;
                 let peer = next_peer_id;
                 next_peer_id = next_peer_id.wrapping_add(1);
+                // Register the peer before events arrive so request routing has a queue.
                 rep_core.add_peer(peer);
                 let config = PeerConfig::new(SocketType::Rep, SecurityRole::Server, transport.link_scope);
                 let connection = TokioCelerity::from_stream(stream, transport, config)?;

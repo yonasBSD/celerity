@@ -63,6 +63,7 @@ pub(crate) struct CurveMechanism {
 impl CurveMechanism {
     pub(crate) fn new(role: SecurityRole) -> Self {
         Self {
+            // Each side begins at the first command it expects to receive or send.
             stage: match role {
                 SecurityRole::Client => CurveStage::Hello,
                 SecurityRole::Server => CurveStage::Welcome,
@@ -109,6 +110,7 @@ impl MechanismDriver for CurveMechanism {
             let client_eph_secret = random_bytes::<32>();
             let client_eph_public = public_from_secret(client_eph_secret);
             let client_nonce_seed = random_bytes::<8>();
+            // Clients may pin the expected server key without exposing it in cleartext.
             let server_key_hash = curve.server_public_key.map(sha256).unwrap_or([0; 32]);
 
             let mut payload = BytesMut::with_capacity(74);
@@ -318,6 +320,7 @@ impl CurveMechanism {
             welcome.ciphertext,
         )?;
         let welcome_body = decode_welcome_body(body)?;
+        // If the caller pinned a server key, enforce it before sending INITIATE.
         if let Some(expected) = curve.server_public_key
             && expected != welcome_body.server_static_public
         {
@@ -411,6 +414,7 @@ impl CurveMechanism {
         }
 
         let curve = curve_config(config)?;
+        // An empty allowlist means "accept any client key".
         if !curve.allowed_client_keys.is_empty()
             && !curve
                 .allowed_client_keys
@@ -436,6 +440,7 @@ impl CurveMechanism {
 
         self.client_static_public = Some(initiate.client_static_public);
         self.stage = CurveStage::Established;
+        // Switch from handshake keys to the long-lived traffic channel.
         self.channel = Some(derive_channel(
             config,
             &self.transcript,

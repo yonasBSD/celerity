@@ -85,6 +85,7 @@ impl InputBuffer {
         }
 
         let mut remaining = len;
+        // Slow path coalesces bytes that span multiple read chunks.
         let mut out = BytesMut::with_capacity(len);
 
         while remaining > 0 {
@@ -143,6 +144,7 @@ pub(crate) fn encode_greeting(config: &PeerConfig) -> Bytes {
     bytes[11] = ZMTP_MINOR;
 
     let mechanism = config.security.mechanism.name().as_bytes();
+    // The mechanism name sits in a fixed-width, NUL-padded field.
     bytes[12..12 + mechanism.len()].copy_from_slice(mechanism);
     bytes[32] = greeting_as_server(config.security.mechanism, config.security_role);
 
@@ -164,6 +166,7 @@ pub(crate) fn decode_greeting(bytes: Bytes) -> Result<Greeting, ProtocolError> {
             .take(GREETING_FILLER_LEN)
             .any(|byte| *byte != 0)
     {
+        // Non-zero filler means the peer is not speaking the expected greeting format.
         return Err(ProtocolError::InvalidGreetingFiller);
     }
 
@@ -194,6 +197,7 @@ pub(crate) fn try_decode_frame(input: &mut InputBuffer) -> Result<Option<Frame>,
 
     let flags =
         FrameFlags::from_bits(flags_raw).ok_or(ProtocolError::InvalidFrameFlags(flags_raw))?;
+    // ZMTP command frames are always single-frame.
     if flags.contains(FrameFlags::COMMAND) && flags.contains(FrameFlags::MORE) {
         return Err(ProtocolError::CommandWithMore);
     }
@@ -203,6 +207,7 @@ pub(crate) fn try_decode_frame(input: &mut InputBuffer) -> Result<Option<Frame>,
     } else {
         1
     };
+    // Peek lengths first so partial frames stay buffered until complete.
     if input.remaining() < 1 + size_len {
         return Ok(None);
     }
@@ -295,6 +300,7 @@ pub(crate) fn encode_message_frames(message: &[Bytes]) -> Result<Vec<Bytes>, Pro
     let mut out = Vec::with_capacity(message.len());
     for (index, body) in message.iter().enumerate() {
         let mut flags = FrameFlags::empty();
+        // Only the last frame clears MORE and closes the multipart sequence.
         if index + 1 != message.len() {
             flags |= FrameFlags::MORE;
         }
@@ -317,6 +323,7 @@ pub(crate) fn encode_ready(metadata: &MetadataMap) -> Result<Bytes, ProtocolErro
 #[cfg_attr(not(feature = "curve"), allow(dead_code))]
 pub(crate) fn encode_raw_frames(frames: &[Bytes]) -> Bytes {
     let total_len: usize = frames.iter().map(Bytes::len).sum();
+    // Secure transports encrypt the framed byte stream, not just message bodies.
     let mut out = BytesMut::with_capacity(total_len);
     for frame in frames {
         out.extend_from_slice(frame);
@@ -421,6 +428,7 @@ fn parse_mechanism(field: &[u8]) -> Result<SecurityMechanism, ProtocolError> {
 
     match &field[..end] {
         b"NULL" => Ok(SecurityMechanism::Null),
+        // Accept both the short and explicit CURVE-RS markers on the wire.
         b"CURVE" | b"CURVE-RS" => Ok(SecurityMechanism::Curve),
         other => Err(ProtocolError::UnsupportedMechanismName(
             String::from_utf8_lossy(other).into_owned(),

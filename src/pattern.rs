@@ -41,6 +41,7 @@ where
             PeerEvent::Subscription { subscribe, topic } => {
                 let peer_topics = self.subscriptions.entry(peer).or_default();
                 if subscribe {
+                    // SUB peers may repeat the same topic, so track a refcount.
                     *peer_topics.entry(topic).or_insert(0) += 1;
                 } else {
                     decrement_topic(peer_topics, topic)?;
@@ -62,6 +63,7 @@ where
         let first_frame = &message[0];
         let mut out = Vec::new();
         for (peer, topics) in &self.subscriptions {
+            // PUB/SUB matching is prefix-based on the first frame only.
             if topics
                 .keys()
                 .any(|topic| topic.is_empty() || first_frame.starts_with(topic))
@@ -113,6 +115,7 @@ where
         }
 
         self.peers.push(peer);
+        // New connections need the full local subscription set replayed to them.
         self.subscriptions
             .keys()
             .cloned()
@@ -128,6 +131,7 @@ where
     }
 
     pub fn subscribe(&mut self, topic: Bytes) -> Result<Vec<PatternAction<PeerId>>, ProtocolError> {
+        // Refcounts keep repeated subscribe calls balanced with cancel.
         *self.subscriptions.entry(topic.clone()).or_insert(0) += 1;
         Ok(self
             .peers
@@ -164,6 +168,7 @@ where
                     return Err(ProtocolError::EmptyMessage);
                 }
 
+                // Local filtering mirrors SUB semantics when the remote side forwards everything.
                 if self.filter_inbound
                     && !self
                         .subscriptions
@@ -234,6 +239,7 @@ where
         self.waiting_on = Some(peer);
 
         let mut wire_message = Vec::with_capacity(message.len() + 1);
+        // REQ prefixes the body with the empty delimiter frame REP expects.
         wire_message.push(Bytes::new());
         wire_message.extend(message);
 
@@ -250,6 +256,7 @@ where
     ) -> Result<Vec<PatternAction<PeerId>>, ProtocolError> {
         match event {
             PeerEvent::Message(mut message) => {
+                // Ignore stray replies from peers we are not currently waiting on.
                 if self.waiting_on != Some(peer) {
                     return Ok(Vec::new());
                 }
@@ -332,9 +339,11 @@ where
         match event {
             PeerEvent::Message(message) => {
                 let (envelope, body) = split_envelope(message)?;
+                // Keep each peer's requests ordered even when peers interleave.
                 let queue = self.queues.entry(peer).or_default();
                 let was_empty = queue.is_empty();
                 queue.push_back(QueuedRequest { envelope, body });
+                // A peer only enters the ready queue when it transitions from empty to non-empty.
                 if was_empty && self.active.as_ref().map(|active| active.peer) != Some(peer) {
                     self.ready_peers.push_back(peer);
                 }
@@ -397,6 +406,7 @@ where
             envelope: request.envelope,
         });
 
+        // REP exposes one active request at a time until reply() consumes it.
         Ok(vec![PatternAction::Deliver {
             peer,
             message: request.body,

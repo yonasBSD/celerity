@@ -267,6 +267,7 @@ impl SecurityConfig {
 
     pub fn default_for(link_scope: LinkScope) -> Self {
         match link_scope {
+            // Local links default to NULL for easier same-host bootstrapping.
             LinkScope::Local => Self::null(),
             LinkScope::NonLocal => Self::curve(),
         }
@@ -318,6 +319,7 @@ impl MetadataMap {
     pub fn get_bytes(&self, name: &[u8]) -> Option<&Bytes> {
         self.entries
             .iter()
+            // Metadata lookup is case-insensitive even though bytes are preserved.
             .find(|(candidate, _)| candidate.as_ref().eq_ignore_ascii_case(name))
             .map(|(_, value)| value)
     }
@@ -342,6 +344,7 @@ impl MetadataMap {
             .iter_mut()
             .find(|(candidate, _)| candidate.as_ref().eq_ignore_ascii_case(&name))
         {
+            // Reinsertions replace the previous value instead of duplicating the key.
             *existing = (name, value);
         } else {
             self.entries.push((name, value));
@@ -426,6 +429,7 @@ impl PeerConfig {
     }
 
     pub(crate) fn validate_policy(&self) -> Result<(), ProtocolError> {
+        // Remote NULL stays fail-closed unless the caller opts in explicitly.
         if self.security.mechanism == SecurityMechanism::Null
             && self.link_scope == LinkScope::NonLocal
             && self.security.policy.require_curve_non_local
@@ -435,6 +439,7 @@ impl PeerConfig {
         }
 
         if self.security.mechanism == SecurityMechanism::Curve {
+            // CURVE always needs an attached key/config block before we handshake.
             let curve = self
                 .security
                 .curve
@@ -459,6 +464,7 @@ impl PeerConfig {
         }
 
         for (name, value) in self.metadata.iter() {
+            // Reserved handshake keys come from explicit config, not caller metadata.
             if !name.as_ref().eq_ignore_ascii_case(b"Socket-Type")
                 && !name.as_ref().eq_ignore_ascii_case(b"Identity")
             {
