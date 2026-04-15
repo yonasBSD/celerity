@@ -6,3 +6,13 @@ Cargo.lock
 *.swp
 *.swo
 *.sock
+.vscode-test/
+*.iml
+*.profraw
+*.profdata
+coverage/
+tarpaulin-report.html
+.direnv/
+.env
+.env.*
+!.env.example
