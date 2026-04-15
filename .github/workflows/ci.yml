@@ -21,6 +21,9 @@ jobs:
       - name: Cache cargo artifacts
         uses: Swatinem/rust-cache@v2
 
+      - name: Check formatting
+        run: cargo fmt --check
+
       - name: Run default tests
         run: cargo test
 
