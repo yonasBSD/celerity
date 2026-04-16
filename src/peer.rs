@@ -68,10 +68,22 @@ impl CelerityPeer {
         }
     }
 
+    /// Feeds raw transport bytes into the peer state machine.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the input violates the handshake, framing, or
+    /// message-processing rules for the configured protocol state.
     pub fn handle_input(&mut self, data: &[u8]) -> Result<(), ProtocolError> {
         self.handle_input_bytes(Bytes::copy_from_slice(data))
     }
 
+    /// Feeds owned transport bytes into the peer state machine.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the input violates the handshake, framing, or
+    /// message-processing rules for the configured protocol state.
     pub fn handle_input_bytes(&mut self, data: Bytes) -> Result<(), ProtocolError> {
         self.ensure_open()?;
         self.input.push(data);
@@ -108,6 +120,13 @@ impl CelerityPeer {
         Ok(())
     }
 
+    /// Encodes an outbound item for transport.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProtocolError::ConnectionClosed`] if the peer has already
+    /// failed or closed, [`ProtocolError::PeerNotReady`] if the handshake is not
+    /// complete, or an encoding/mechanism error from the active security layer.
     pub fn submit(&mut self, item: OutboundItem) -> Result<(), ProtocolError> {
         self.ensure_open()?;
         if self.state != PeerState::Traffic {

@@ -28,6 +28,7 @@ impl<PeerId> PubCore<PeerId>
 where
     PeerId: Copy + Eq + Hash,
 {
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
@@ -36,6 +37,12 @@ where
         self.subscriptions.remove(&peer);
     }
 
+    /// Updates subscription state from a peer event.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProtocolError::UnknownSubscription`] when a peer cancels a
+    /// topic that is not currently tracked.
     pub fn on_peer_event(&mut self, peer: PeerId, event: PeerEvent) -> Result<(), ProtocolError> {
         match event {
             PeerEvent::Subscription { subscribe, topic } => {
@@ -55,6 +62,11 @@ where
         }
     }
 
+    /// Produces outbound publish actions for matching subscribers.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProtocolError::EmptyMessage`] when `message` has no frames.
     pub fn publish(&self, message: Multipart) -> Result<Vec<PatternAction<PeerId>>, ProtocolError> {
         if message.is_empty() {
             return Err(ProtocolError::EmptyMessage);
@@ -100,10 +112,12 @@ impl<PeerId> SubCore<PeerId>
 where
     PeerId: Copy + Eq,
 {
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
+    #[must_use]
     pub fn with_filter_inbound(mut self, filter_inbound: bool) -> Self {
         self.filter_inbound = filter_inbound;
         self
@@ -130,6 +144,11 @@ where
         self.peers.retain(|candidate| *candidate != peer);
     }
 
+    /// Registers a local subscription and fans it out to connected peers.
+    ///
+    /// # Errors
+    ///
+    /// This method currently does not return an error.
     pub fn subscribe(&mut self, topic: Bytes) -> Result<Vec<PatternAction<PeerId>>, ProtocolError> {
         // Refcounts keep repeated subscribe calls balanced with cancel.
         *self.subscriptions.entry(topic.clone()).or_insert(0) += 1;
@@ -144,6 +163,12 @@ where
             .collect())
     }
 
+    /// Removes a local subscription and fans the cancel out to connected peers.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProtocolError::UnknownSubscription`] when `topic` is not
+    /// currently subscribed.
     pub fn cancel(&mut self, topic: Bytes) -> Result<Vec<PatternAction<PeerId>>, ProtocolError> {
         decrement_topic(&mut self.subscriptions, topic.clone())?;
         Ok(self
@@ -157,6 +182,12 @@ where
             .collect())
     }
 
+    /// Handles inbound peer events for a SUB socket.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProtocolError::EmptyMessage`] when an inbound message has no
+    /// frames.
     pub fn on_peer_event(
         &mut self,
         peer: PeerId,
@@ -204,6 +235,7 @@ impl<PeerId> ReqCore<PeerId>
 where
     PeerId: Copy + Eq,
 {
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
@@ -221,6 +253,13 @@ where
         }
     }
 
+    /// Sends a request to the next available peer.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProtocolError::EmptyMessage`] when `message` has no frames,
+    /// [`ProtocolError::ReqStateViolation`] when a reply is still pending, or
+    /// [`ProtocolError::NoAvailablePeers`] when no peers are connected.
     pub fn send(&mut self, message: Multipart) -> Result<PatternAction<PeerId>, ProtocolError> {
         if message.is_empty() {
             return Err(ProtocolError::EmptyMessage);
@@ -249,6 +288,13 @@ where
         })
     }
 
+    /// Handles replies arriving from peers.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProtocolError::MissingEnvelopeDelimiter`] when the reply does
+    /// not begin with the required empty delimiter frame, or
+    /// [`ProtocolError::MissingBodyFrames`] when the reply has no body frames.
     pub fn on_peer_event(
         &mut self,
         peer: PeerId,
@@ -310,6 +356,7 @@ impl<PeerId> RepCore<PeerId>
 where
     PeerId: Copy + Eq + Hash,
 {
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
@@ -318,6 +365,11 @@ where
         self.queues.entry(peer).or_default();
     }
 
+    /// Removes a peer and returns any action unblocked by that removal.
+    ///
+    /// # Errors
+    ///
+    /// This method currently does not return an error.
     pub fn remove_peer(
         &mut self,
         peer: PeerId,
@@ -331,6 +383,13 @@ where
         Ok(Vec::new())
     }
 
+    /// Queues an inbound request from a peer.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProtocolError::MissingEnvelopeDelimiter`] when the request is
+    /// missing the empty delimiter frame, or [`ProtocolError::MissingBodyFrames`]
+    /// when the request has no body frames.
     pub fn on_peer_event(
         &mut self,
         peer: PeerId,
@@ -356,6 +415,13 @@ where
         }
     }
 
+    /// Sends a reply for the active request and dispatches the next ready one.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProtocolError::EmptyMessage`] when `message` has no frames, or
+    /// [`ProtocolError::RepStateViolation`] when there is no active request to
+    /// reply to.
     pub fn reply(
         &mut self,
         message: Multipart,
