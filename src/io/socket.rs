@@ -393,7 +393,7 @@ async fn dispatch_pub_message(
     peers: &HashMap<u64, ConnectionHandle>,
     message: Multipart,
 ) -> Result<(), TokioCelerityError> {
-    for action in pub_core.publish(message)? {
+    for action in pub_core.publish(&message)? {
         if let PatternAction::Send { peer, item } = action {
             if let Some(handle) = peers.get(&peer) {
                 // PUB fanout is best-effort; a full peer queue does not stall everyone else.
@@ -426,7 +426,7 @@ async fn run_sub_socket(
                 match command {
                     Some(SubCommand::Subscribe(topic, reply_tx)) => {
                         let result = async {
-                            for action in sub_core.subscribe(topic)? {
+                            for action in sub_core.subscribe(&topic)? {
                                 send_sub_action(&connection, action).await?;
                             }
                             Ok(())
@@ -435,7 +435,7 @@ async fn run_sub_socket(
                     }
                     Some(SubCommand::Cancel(topic, reply_tx)) => {
                         let result = async {
-                            for action in sub_core.cancel(topic)? {
+                            for action in sub_core.cancel(&topic)? {
                                 send_sub_action(&connection, action).await?;
                             }
                             Ok(())

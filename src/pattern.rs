@@ -51,7 +51,7 @@ where
                     // SUB peers may repeat the same topic, so track a refcount.
                     *peer_topics.entry(topic).or_insert(0) += 1;
                 } else {
-                    decrement_topic(peer_topics, topic)?;
+                    decrement_topic(peer_topics, &topic)?;
                     if peer_topics.is_empty() {
                         self.subscriptions.remove(&peer);
                     }
@@ -67,7 +67,10 @@ where
     /// # Errors
     ///
     /// Returns [`ProtocolError::EmptyMessage`] when `message` has no frames.
-    pub fn publish(&self, message: Multipart) -> Result<Vec<PatternAction<PeerId>>, ProtocolError> {
+    pub fn publish(
+        &self,
+        message: &Multipart,
+    ) -> Result<Vec<PatternAction<PeerId>>, ProtocolError> {
         if message.is_empty() {
             return Err(ProtocolError::EmptyMessage);
         }
@@ -149,7 +152,10 @@ where
     /// # Errors
     ///
     /// This method currently does not return an error.
-    pub fn subscribe(&mut self, topic: Bytes) -> Result<Vec<PatternAction<PeerId>>, ProtocolError> {
+    pub fn subscribe(
+        &mut self,
+        topic: &Bytes,
+    ) -> Result<Vec<PatternAction<PeerId>>, ProtocolError> {
         // Refcounts keep repeated subscribe calls balanced with cancel.
         *self.subscriptions.entry(topic.clone()).or_insert(0) += 1;
         Ok(self
@@ -169,8 +175,8 @@ where
     ///
     /// Returns [`ProtocolError::UnknownSubscription`] when `topic` is not
     /// currently subscribed.
-    pub fn cancel(&mut self, topic: Bytes) -> Result<Vec<PatternAction<PeerId>>, ProtocolError> {
-        decrement_topic(&mut self.subscriptions, topic.clone())?;
+    pub fn cancel(&mut self, topic: &Bytes) -> Result<Vec<PatternAction<PeerId>>, ProtocolError> {
+        decrement_topic(&mut self.subscriptions, topic)?;
         Ok(self
             .peers
             .iter()
@@ -397,7 +403,7 @@ where
     ) -> Result<Vec<PatternAction<PeerId>>, ProtocolError> {
         match event {
             PeerEvent::Message(message) => {
-                let (envelope, body) = split_envelope(message)?;
+                let (envelope, body) = split_envelope(&message)?;
                 // Keep each peer's requests ordered even when peers interleave.
                 let queue = self.queues.entry(peer).or_default();
                 let was_empty = queue.is_empty();
@@ -479,21 +485,21 @@ where
     }
 }
 
-fn decrement_topic(topics: &mut HashMap<Bytes, usize>, topic: Bytes) -> Result<(), ProtocolError> {
-    match topics.get_mut(&topic) {
+fn decrement_topic(topics: &mut HashMap<Bytes, usize>, topic: &Bytes) -> Result<(), ProtocolError> {
+    match topics.get_mut(topic) {
         Some(count) if *count > 1 => {
             *count -= 1;
             Ok(())
         }
         Some(_) => {
-            topics.remove(&topic);
+            topics.remove(topic);
             Ok(())
         }
         None => Err(ProtocolError::UnknownSubscription),
     }
 }
 
-fn split_envelope(message: Multipart) -> Result<(Multipart, Multipart), ProtocolError> {
+fn split_envelope(message: &Multipart) -> Result<(Multipart, Multipart), ProtocolError> {
     let Some(delimiter_index) = message.iter().position(Bytes::is_empty) else {
         return Err(ProtocolError::MissingEnvelopeDelimiter);
     };
@@ -542,7 +548,7 @@ mod tests {
         .unwrap();
 
         let actions = core
-            .publish(vec![
+            .publish(&vec![
                 Bytes::from_static(b"abc"),
                 Bytes::from_static(b"body"),
             ])
@@ -562,7 +568,7 @@ mod tests {
         )
         .unwrap();
 
-        let actions = core.publish(vec![Bytes::from_static(b"topic")]).unwrap();
+        let actions = core.publish(&vec![Bytes::from_static(b"topic")]).unwrap();
         assert_eq!(
             actions,
             vec![PatternAction::Send {
@@ -575,7 +581,7 @@ mod tests {
     #[test]
     fn subcore_replays_subscriptions_to_new_peers() {
         let mut core = SubCore::<u8>::new();
-        let _ = core.subscribe(Bytes::from_static(b"alpha")).unwrap();
+        let _ = core.subscribe(&Bytes::from_static(b"alpha")).unwrap();
         let actions = core.add_peer(3);
         assert_eq!(
             actions,
@@ -590,7 +596,7 @@ mod tests {
     fn subcore_filters_inbound_messages() {
         let mut core = SubCore::<u8>::new();
         core.add_peer(1);
-        let _ = core.subscribe(Bytes::from_static(b"ab")).unwrap();
+        let _ = core.subscribe(&Bytes::from_static(b"ab")).unwrap();
 
         let allowed = core
             .on_peer_event(1, PeerEvent::Message(vec![Bytes::from_static(b"abc")]))
@@ -630,7 +636,7 @@ mod tests {
         let mut core = SubCore::<u8>::new();
 
         assert_eq!(
-            core.cancel(Bytes::from_static(b"alpha")).unwrap_err(),
+            core.cancel(&Bytes::from_static(b"alpha")).unwrap_err(),
             ProtocolError::UnknownSubscription
         );
     }

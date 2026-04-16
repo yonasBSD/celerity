@@ -154,17 +154,17 @@ impl MechanismDriver for CurveMechanism {
         {
             match (config.security_role, command) {
                 (SecurityRole::Server, Command::Hello(payload)) => {
-                    self.on_hello(config, payload, output)?;
+                    self.on_hello(config, &payload, output)?;
                     Ok(None)
                 }
                 (SecurityRole::Client, Command::Welcome(payload)) => {
-                    self.on_welcome(config, local_metadata, payload, output)?;
+                    self.on_welcome(config, local_metadata, &payload, output)?;
                     Ok(None)
                 }
                 (SecurityRole::Server, Command::Initiate(payload)) => {
-                    self.on_initiate(config, local_metadata, payload, output)
+                    self.on_initiate(config, local_metadata, &payload, output)
                 }
-                (SecurityRole::Client, Command::Ready(payload)) => self.on_ready(config, payload),
+                (SecurityRole::Client, Command::Ready(payload)) => self.on_ready(config, &payload),
                 (_, Command::Error(reason)) => Err(ProtocolError::RemoteError(
                     String::from_utf8_lossy(&reason).into_owned(),
                 )),
@@ -199,7 +199,7 @@ impl MechanismDriver for CurveMechanism {
             let channel = self.channel.as_mut().ok_or(ProtocolError::PeerNotReady)?;
             let raw_frames = encode_outbound_item(item)?;
             let plaintext = encode_raw_frames(&raw_frames);
-            let payload = seal_message(channel, plaintext)?;
+            let payload = seal_message(channel, &plaintext)?;
             Ok(vec![encode_command(Command::Message(payload))?])
         }
     }
@@ -224,7 +224,7 @@ impl CurveMechanism {
     fn on_hello(
         &mut self,
         config: &PeerConfig,
-        payload: Bytes,
+        payload: &Bytes,
         output: &mut VecDeque<ProtocolAction>,
     ) -> Result<(), ProtocolError> {
         if self.stage != CurveStage::Welcome {
@@ -248,7 +248,7 @@ impl CurveMechanism {
             return Err(ProtocolError::CurveAuthenticationFailed);
         }
 
-        append_transcript(&mut self.transcript, b"HELLO", &payload);
+        append_transcript(&mut self.transcript, b"HELLO", payload);
 
         let server_eph_secret = random_bytes::<32>();
         let server_eph_public = public_from_secret(server_eph_secret);
@@ -262,11 +262,12 @@ impl CurveMechanism {
         body.extend_from_slice(&local_static_public);
         body.extend_from_slice(&cookie);
         body.extend_from_slice(&server_nonce_seed);
+        let body = body.freeze();
         let ciphertext = encrypt_aead(
             &welcome_key,
             control_nonce(1),
             &sha256(&self.transcript),
-            body.freeze(),
+            &body,
         )?;
 
         let mut welcome = BytesMut::with_capacity(33 + ciphertext.len());
@@ -295,7 +296,7 @@ impl CurveMechanism {
         &mut self,
         config: &PeerConfig,
         local_metadata: &MetadataMap,
-        payload: Bytes,
+        payload: &Bytes,
         output: &mut VecDeque<ProtocolAction>,
     ) -> Result<(), ProtocolError> {
         if self.stage != CurveStage::Welcome {
@@ -317,7 +318,7 @@ impl CurveMechanism {
             &welcome_key,
             control_nonce(1),
             &sha256(&self.transcript),
-            welcome.ciphertext,
+            &welcome.ciphertext,
         )?;
         let welcome_body = decode_welcome_body(body)?;
         // If the caller pinned a server key, enforce it before sending INITIATE.
@@ -327,7 +328,7 @@ impl CurveMechanism {
             return Err(ProtocolError::CurveAuthenticationFailed);
         }
 
-        append_transcript(&mut self.transcript, b"WELCOME", &payload);
+        append_transcript(&mut self.transcript, b"WELCOME", payload);
 
         let local_static_secret = local_static_secret(config)?;
         let local_static_public = local_static_public(config)?;
@@ -345,11 +346,12 @@ impl CurveMechanism {
         body.extend_from_slice(&welcome_body.cookie);
         body.put_u32(metadata.len() as u32);
         body.extend_from_slice(&metadata);
+        let body = body.freeze();
         let ciphertext = encrypt_aead(
             &initiate_key,
             control_nonce(2),
             &sha256(&self.transcript),
-            body.freeze(),
+            &body,
         )?;
 
         let mut initiate = BytesMut::with_capacity(32 + ciphertext.len());
@@ -375,7 +377,7 @@ impl CurveMechanism {
         &mut self,
         config: &PeerConfig,
         local_metadata: &MetadataMap,
-        payload: Bytes,
+        payload: &Bytes,
         output: &mut VecDeque<ProtocolAction>,
     ) -> Result<Option<HandshakeComplete>, ProtocolError> {
         if self.stage != CurveStage::Initiate {
@@ -403,7 +405,7 @@ impl CurveMechanism {
             &initiate_key,
             control_nonce(2),
             &sha256(&self.transcript),
-            initiate.ciphertext,
+            &initiate.ciphertext,
         )?;
         let initiate_body = decode_initiate_body(body)?;
         let expected_cookie = self
@@ -424,7 +426,7 @@ impl CurveMechanism {
             return Err(ProtocolError::CurveAuthenticationFailed);
         }
 
-        append_transcript(&mut self.transcript, b"INITIATE", &payload);
+        append_transcript(&mut self.transcript, b"INITIATE", payload);
         let peer_socket_type = validate_remote_metadata(config, &initiate_body.metadata)?;
         let ready_key = derive_key(&self.transcript, &parts, b"curve-rs-ready")?;
         let ready_body = encode_metadata(local_metadata)?;
@@ -432,7 +434,7 @@ impl CurveMechanism {
             &ready_key,
             control_nonce(3),
             &sha256(&self.transcript),
-            ready_body,
+            &ready_body,
         )?;
         output.push_back(ProtocolAction::Write(encode_command(Command::Ready(
             ready_payload,
@@ -460,7 +462,7 @@ impl CurveMechanism {
     fn on_ready(
         &mut self,
         config: &PeerConfig,
-        payload: Bytes,
+        payload: &Bytes,
     ) -> Result<Option<HandshakeComplete>, ProtocolError> {
         if self.stage != CurveStage::Ready {
             return Err(ProtocolError::CurveHandshake("unexpected READY"));

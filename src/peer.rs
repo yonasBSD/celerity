@@ -127,13 +127,13 @@ impl CelerityPeer {
     /// Returns [`ProtocolError::ConnectionClosed`] if the peer has already
     /// failed or closed, [`ProtocolError::PeerNotReady`] if the handshake is not
     /// complete, or an encoding/mechanism error from the active security layer.
-    pub fn submit(&mut self, item: OutboundItem) -> Result<(), ProtocolError> {
+    pub fn submit(&mut self, item: &OutboundItem) -> Result<(), ProtocolError> {
         self.ensure_open()?;
         if self.state != PeerState::Traffic {
             return Err(ProtocolError::PeerNotReady);
         }
 
-        for bytes in self.mechanism.encode_outbound(&item)? {
+        for bytes in self.mechanism.encode_outbound(item)? {
             self.output.push_back(ProtocolAction::Write(bytes));
         }
 
@@ -501,7 +501,7 @@ mod tests {
         let _ = pump(&mut client, &mut server).unwrap();
 
         client
-            .submit(OutboundItem::Message(vec![
+            .submit(&OutboundItem::Message(vec![
                 Bytes::from_static(b""),
                 Bytes::from_static(b"ping"),
             ]))
@@ -520,7 +520,7 @@ mod tests {
         let mut peer = CelerityPeer::new(local_config(SocketType::Req, SecurityRole::Client));
 
         assert_eq!(
-            peer.submit(OutboundItem::Message(vec![Bytes::from_static(b"ping")]))
+            peer.submit(&OutboundItem::Message(vec![Bytes::from_static(b"ping")]))
                 .unwrap_err(),
             ProtocolError::PeerNotReady
         );
@@ -594,7 +594,7 @@ mod tests {
         assert_eq!(err, ProtocolError::RemoteError("boom".to_owned()));
         assert_eq!(
             client
-                .submit(OutboundItem::Message(vec![Bytes::from_static(b"again")]))
+                .submit(&OutboundItem::Message(vec![Bytes::from_static(b"again")]))
                 .unwrap_err(),
             ProtocolError::RemoteError("boom".to_owned())
         );

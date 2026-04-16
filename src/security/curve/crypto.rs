@@ -114,7 +114,7 @@ pub(super) fn derive_channel(
 
 pub(super) fn seal_message(
     channel: &mut SecureChannel,
-    plaintext: Bytes,
+    plaintext: &Bytes,
 ) -> Result<Bytes, ProtocolError> {
     rotate_if_needed(
         &mut channel.send,
@@ -235,7 +235,7 @@ pub(super) fn encrypt_aead(
     key: &[u8; 32],
     nonce: [u8; 12],
     aad: &[u8],
-    plaintext: Bytes,
+    plaintext: &Bytes,
 ) -> Result<Bytes, ProtocolError> {
     let mut buffer = BytesMut::from(plaintext.as_ref());
     let tag = encrypt_in_place(key, nonce, aad, &mut buffer)?;
@@ -247,7 +247,7 @@ pub(super) fn decrypt_aead(
     key: &[u8; 32],
     nonce: [u8; 12],
     aad: &[u8],
-    ciphertext: Bytes,
+    ciphertext: &Bytes,
 ) -> Result<Bytes, ProtocolError> {
     if ciphertext.len() < 16 {
         return Err(ProtocolError::CurveAuthenticationFailed);
@@ -457,7 +457,7 @@ mod tests {
     fn secure_channel_roundtrips_and_rejects_replays() {
         let (mut client, mut server) = sample_channels(0, 0).unwrap();
 
-        let payload = seal_message(&mut client, Bytes::from_static(b"hello")).unwrap();
+        let payload = seal_message(&mut client, &Bytes::from_static(b"hello")).unwrap();
         assert_eq!(
             open_message(&mut server, payload.clone()).unwrap(),
             Bytes::from_static(b"hello")
@@ -472,7 +472,7 @@ mod tests {
     fn secure_channel_rekeys_after_message_limit() {
         let (mut client, mut server) = sample_channels(1, 0).unwrap();
 
-        let first = seal_message(&mut client, Bytes::from_static(b"one")).unwrap();
+        let first = seal_message(&mut client, &Bytes::from_static(b"one")).unwrap();
         assert_eq!(
             open_message(&mut server, first).unwrap(),
             Bytes::from_static(b"one")
@@ -480,7 +480,7 @@ mod tests {
         assert_eq!(client.send.epoch, 0);
         assert_eq!(server.recv.epoch, 0);
 
-        let second = seal_message(&mut client, Bytes::from_static(b"two")).unwrap();
+        let second = seal_message(&mut client, &Bytes::from_static(b"two")).unwrap();
         assert_eq!(
             open_message(&mut server, second).unwrap(),
             Bytes::from_static(b"two")

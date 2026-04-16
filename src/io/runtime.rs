@@ -166,7 +166,7 @@ async fn run_tokio_peer(
                     // Release everything queued once the peer reports handshake completion.
                     while let Some(queued) = pending.pop_front() {
                         pending_bytes = pending_bytes.saturating_sub(queued.bytes);
-                        peer.submit(queued.item)?;
+                        peer.submit(&queued.item)?;
                     }
                     needs_drain = true;
                 } else if drain.has_more {
@@ -190,7 +190,7 @@ async fn run_tokio_peer(
                 match command {
                     Some(RuntimeCommand::Submit(item, ack)) => {
                         if ready_for_traffic {
-                            peer.submit(item)?;
+                            peer.submit(&item)?;
                             let _ = ack.send(());
                             needs_drain = true;
                         } else if queue_has_headroom(hwm, pending.len(), pending_bytes) {
