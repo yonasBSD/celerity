@@ -608,18 +608,32 @@ mod tests {
         SecurityPolicy, SecurityRole, SocketType,
     };
 
+    fn ok<T, E: core::fmt::Debug>(result: Result<T, E>) -> T {
+        match result {
+            Ok(value) => value,
+            Err(err) => panic!("expected Ok(..), got Err({err:?})"),
+        }
+    }
+
+    fn err<T, E>(result: Result<T, E>) -> E {
+        match result {
+            Ok(_) => panic!("expected Err(..), got Ok(..)"),
+            Err(err) => err,
+        }
+    }
+
     #[test]
     fn metadata_socket_type_reports_missing_and_invalid_values() {
         let metadata = MetadataMap::new();
         assert_eq!(
-            metadata.socket_type().unwrap_err(),
+            err(metadata.socket_type()),
             ProtocolError::MissingMetadata("Socket-Type")
         );
 
         let mut metadata = MetadataMap::new();
-        metadata.insert("Socket-Type", "PAIR").unwrap();
+        ok(metadata.insert("Socket-Type", "PAIR"));
         assert_eq!(
-            metadata.socket_type().unwrap_err(),
+            err(metadata.socket_type()),
             ProtocolError::InvalidSocketType(Bytes::from_static(b"PAIR"))
         );
     }
@@ -627,15 +641,15 @@ mod tests {
     #[test]
     fn handshake_metadata_uses_canonical_reserved_fields() {
         let mut metadata = MetadataMap::new();
-        metadata.insert("Socket-Type", "SUB").unwrap();
-        metadata.insert("Identity", "shadow").unwrap();
-        metadata.insert("X-Test", "value").unwrap();
+        ok(metadata.insert("Socket-Type", "SUB"));
+        ok(metadata.insert("Identity", "shadow"));
+        ok(metadata.insert("X-Test", "value"));
 
         let handshake = PeerConfig::new(SocketType::Req, SecurityRole::Client, LinkScope::Local)
             .with_identity("client-id")
             .with_metadata(metadata)
-            .handshake_metadata()
-            .unwrap();
+            .handshake_metadata();
+        let handshake = ok(handshake);
 
         assert_eq!(
             handshake.get("Socket-Type").cloned(),
@@ -660,7 +674,7 @@ mod tests {
             .with_security(security);
 
         assert_eq!(
-            config.validate_policy().unwrap_err(),
+            err(config.validate_policy()),
             ProtocolError::MissingCurveConfig
         );
     }
@@ -675,6 +689,6 @@ mod tests {
         let config = PeerConfig::new(SocketType::Req, SecurityRole::Client, LinkScope::NonLocal)
             .with_security(SecurityConfig::new(SecurityMechanism::Null).with_policy(policy));
 
-        config.validate_policy().unwrap();
+        ok(config.validate_policy());
     }
 }

@@ -134,11 +134,25 @@ mod tests {
     use super::{Endpoint, TransportKind};
     use crate::io::TokioCelerityError;
 
+    fn ok<T, E: core::fmt::Debug>(result: Result<T, E>) -> T {
+        match result {
+            Ok(value) => value,
+            Err(err) => panic!("expected Ok(..), got Err({err:?})"),
+        }
+    }
+
+    fn err<T, E>(result: Result<T, E>) -> E {
+        match result {
+            Ok(_) => panic!("expected Err(..), got Ok(..)"),
+            Err(err) => err,
+        }
+    }
+
     #[test]
     fn tcp_helpers_roundtrip() {
         let endpoint = Endpoint::Tcp("127.0.0.1:5555".to_owned());
         assert_eq!(endpoint.transport_kind(), TransportKind::Tcp);
-        assert_eq!(endpoint.tcp_target().unwrap(), "127.0.0.1:5555");
+        assert_eq!(ok(endpoint.tcp_target()), "127.0.0.1:5555");
 
         let derived =
             Endpoint::from_local_addr(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 6000));
@@ -152,11 +166,11 @@ mod tests {
         let ipc = Endpoint::Ipc(PathBuf::from("/tmp/celerity.sock"));
 
         assert!(matches!(
-            tcp.ipc_path().unwrap_err(),
+            err(tcp.ipc_path()),
             TokioCelerityError::UnsupportedEndpoint(_)
         ));
         assert!(matches!(
-            ipc.tcp_target().unwrap_err(),
+            err(ipc.tcp_target()),
             TokioCelerityError::UnsupportedEndpoint(_)
         ));
     }

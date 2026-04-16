@@ -431,6 +431,20 @@ mod tests {
     };
     use crate::io::TokioCelerityError;
 
+    fn ok<T, E: core::fmt::Debug>(result: Result<T, E>) -> T {
+        match result {
+            Ok(value) => value,
+            Err(err) => panic!("expected Ok(..), got Err({err:?})"),
+        }
+    }
+
+    fn err<T, E>(result: Result<T, E>) -> E {
+        match result {
+            Ok(_) => panic!("expected Err(..), got Ok(..)"),
+            Err(err) => err,
+        }
+    }
+
     #[test]
     fn curve_handshake_deadline_depends_on_mechanism_and_timeout() {
         let null_config = PeerConfig::new(SocketType::Req, SecurityRole::Client, LinkScope::Local);
@@ -490,15 +504,15 @@ mod tests {
         let config = PeerConfig::new(SocketType::Req, SecurityRole::Client, LinkScope::Local)
             .with_security(SecurityConfig::new(SecurityMechanism::Null).with_policy(policy));
 
-        let err = apply_transport_policy(
+        let result = apply_transport_policy(
             config,
             TransportMeta {
                 kind: TransportKind::Tcp,
                 link_scope: LinkScope::Local,
                 null_authorized: true,
             },
-        )
-        .unwrap_err();
+        );
+        let err = err(result);
         assert!(matches!(err, TokioCelerityError::LocalAuth { .. }));
     }
 
@@ -512,15 +526,15 @@ mod tests {
         let config = PeerConfig::new(SocketType::Req, SecurityRole::Client, LinkScope::Local)
             .with_security(SecurityConfig::new(SecurityMechanism::Null).with_policy(policy));
 
-        let err = apply_transport_policy(
+        let result = apply_transport_policy(
             config,
             TransportMeta {
                 kind: TransportKind::Ipc,
                 link_scope: LinkScope::Local,
                 null_authorized: true,
             },
-        )
-        .unwrap_err();
+        );
+        let err = err(result);
         assert!(matches!(err, TokioCelerityError::LocalAuth { .. }));
     }
 
@@ -528,15 +542,15 @@ mod tests {
     fn apply_transport_policy_rejects_strict_ipc_without_authorization() {
         let config = PeerConfig::new(SocketType::Req, SecurityRole::Client, LinkScope::Local)
             .with_security(SecurityConfig::null());
-        let err = apply_transport_policy(
+        let result = apply_transport_policy(
             config,
             TransportMeta {
                 kind: TransportKind::Ipc,
                 link_scope: LinkScope::Local,
                 null_authorized: false,
             },
-        )
-        .unwrap_err();
+        );
+        let err = err(result);
         assert!(matches!(err, TokioCelerityError::LocalAuth { .. }));
     }
 
@@ -554,8 +568,8 @@ mod tests {
                 link_scope: LinkScope::Local,
                 null_authorized: false,
             },
-        )
-        .unwrap();
+        );
+        let applied = ok(applied);
         assert_eq!(applied.link_scope, LinkScope::Local);
     }
 }

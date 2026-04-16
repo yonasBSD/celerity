@@ -355,6 +355,27 @@ mod tests {
         SecurityConfig, SecurityRole, SocketType,
     };
 
+    fn ok<T, E: core::fmt::Debug>(result: Result<T, E>) -> T {
+        match result {
+            Ok(value) => value,
+            Err(err) => panic!("expected Ok(..), got Err({err:?})"),
+        }
+    }
+
+    fn err<T, E>(result: Result<T, E>) -> E {
+        match result {
+            Ok(_) => panic!("expected Err(..), got Ok(..)"),
+            Err(err) => err,
+        }
+    }
+
+    fn some<T>(value: Option<T>) -> T {
+        match value {
+            Some(value) => value,
+            None => panic!("expected Some(..), got None"),
+        }
+    }
+
     fn local_config(socket_type: SocketType, role: SecurityRole) -> PeerConfig {
         PeerConfig::new(socket_type, role, LinkScope::Local)
     }
@@ -406,19 +427,17 @@ mod tests {
         let mut server = CelerityPeer::new(local_config(SocketType::Rep, SecurityRole::Server));
         let _ = server.poll_output();
 
-        let greeting = match client.poll_output().unwrap() {
+        let greeting = match some(client.poll_output()) {
             ProtocolAction::Write(bytes) => bytes,
             ProtocolAction::Event(_) => unreachable!(),
         };
 
         for byte in greeting.iter().copied().take(greeting.len() - 1) {
-            server.handle_input(&[byte]).unwrap();
+            ok(server.handle_input(&[byte]));
             assert!(server.poll_output().is_none());
         }
 
-        server
-            .handle_input(&[greeting[greeting.len() - 1]])
-            .unwrap();
+        ok(server.handle_input(&[greeting[greeting.len() - 1]]));
         assert!(server.poll_output().is_none());
     }
 
@@ -427,7 +446,7 @@ mod tests {
         let mut client = CelerityPeer::new(local_config(SocketType::Req, SecurityRole::Client));
         let mut server = CelerityPeer::new(local_config(SocketType::Rep, SecurityRole::Server));
 
-        let events = pump(&mut client, &mut server).unwrap();
+        let events = ok(pump(&mut client, &mut server));
         assert_eq!(events.len(), 2);
         assert!(
             events
@@ -441,7 +460,7 @@ mod tests {
         let mut left = CelerityPeer::new(local_config(SocketType::Pub, SecurityRole::Client));
         let mut right = CelerityPeer::new(local_config(SocketType::Pub, SecurityRole::Server));
 
-        let err = pump(&mut left, &mut right).unwrap_err();
+        let err = err(pump(&mut left, &mut right));
         assert_eq!(
             err,
             ProtocolError::IncompatibleSocketTypes {
@@ -457,7 +476,7 @@ mod tests {
         let mut client = CelerityPeer::new(non_local_curve(SocketType::Req, SecurityRole::Client));
         let mut server = CelerityPeer::new(non_local_curve(SocketType::Rep, SecurityRole::Server));
 
-        let events = pump(&mut client, &mut server).unwrap();
+        let events = ok(pump(&mut client, &mut server));
         assert_eq!(events.len(), 2);
         assert!(
             events
@@ -473,7 +492,7 @@ mod tests {
                 .with_security(SecurityConfig::null()),
         );
         assert_eq!(
-            peer.handle_input(&[]).unwrap_err(),
+            err(peer.handle_input(&[])),
             ProtocolError::InsecureNullForNonLocal
         );
         assert!(peer.poll_output().is_none());
@@ -490,7 +509,7 @@ mod tests {
             SecurityRole::Server,
         ));
 
-        let events = pump(&mut client, &mut server).unwrap();
+        let events = ok(pump(&mut client, &mut server));
         assert_eq!(events.len(), 2);
     }
 
@@ -498,16 +517,14 @@ mod tests {
     fn traffic_messages_emit_events() {
         let mut client = CelerityPeer::new(local_config(SocketType::Req, SecurityRole::Client));
         let mut server = CelerityPeer::new(local_config(SocketType::Rep, SecurityRole::Server));
-        let _ = pump(&mut client, &mut server).unwrap();
+        let _ = ok(pump(&mut client, &mut server));
 
-        client
-            .submit(&OutboundItem::Message(vec![
-                Bytes::from_static(b""),
-                Bytes::from_static(b"ping"),
-            ]))
-            .unwrap();
+        ok(client.submit(&OutboundItem::Message(vec![
+            Bytes::from_static(b""),
+            Bytes::from_static(b"ping"),
+        ])));
 
-        let events = pump(&mut client, &mut server).unwrap();
+        let events = ok(pump(&mut client, &mut server));
         assert!(events.iter().any(|event| matches!(
             event,
             PeerEvent::Message(message)
@@ -520,8 +537,7 @@ mod tests {
         let mut peer = CelerityPeer::new(local_config(SocketType::Req, SecurityRole::Client));
 
         assert_eq!(
-            peer.submit(&OutboundItem::Message(vec![Bytes::from_static(b"ping")]))
-                .unwrap_err(),
+            err(peer.submit(&OutboundItem::Message(vec![Bytes::from_static(b"ping",)]))),
             ProtocolError::PeerNotReady
         );
     }
@@ -534,7 +550,7 @@ mod tests {
                 .with_security(SecurityConfig::curve()),
         );
 
-        let err = pump(&mut left, &mut right).unwrap_err();
+        let err = err(pump(&mut left, &mut right));
         assert_eq!(
             err,
             ProtocolError::MechanismMismatch {
@@ -551,10 +567,10 @@ mod tests {
             encode_greeting(&local_config(SocketType::Rep, SecurityRole::Server)).to_vec();
         greeting[32] = 1;
 
-        let err = peer.handle_input_bytes(Bytes::from(greeting)).unwrap_err();
-        assert_eq!(err, ProtocolError::InvalidAsServer(1));
+        let invalid = err(peer.handle_input_bytes(Bytes::from(greeting)));
+        assert_eq!(invalid, ProtocolError::InvalidAsServer(1));
         assert_eq!(
-            peer.handle_input(&[]).unwrap_err(),
+            err(peer.handle_input(&[])),
             ProtocolError::InvalidAsServer(1)
         );
     }
@@ -565,17 +581,16 @@ mod tests {
         let mut server = CelerityPeer::new(local_config(SocketType::Rep, SecurityRole::Server));
         let _ = server.poll_output();
 
-        let greeting = match client.poll_output().unwrap() {
+        let greeting = match some(client.poll_output()) {
             ProtocolAction::Write(bytes) => bytes,
             ProtocolAction::Event(_) => unreachable!(),
         };
-        server.handle_input_bytes(greeting).unwrap();
+        ok(server.handle_input_bytes(greeting));
 
-        let frame = encode_message_frames(&[Bytes::from_static(b"oops")])
-            .unwrap()
-            .remove(0);
+        let mut frames = ok(encode_message_frames(&[Bytes::from_static(b"oops")]));
+        let frame = frames.remove(0);
         assert_eq!(
-            server.handle_input_bytes(frame).unwrap_err(),
+            err(server.handle_input_bytes(frame)),
             ProtocolError::UnexpectedMessageDuringHandshake
         );
     }
@@ -584,18 +599,15 @@ mod tests {
     fn traffic_error_command_closes_the_peer() {
         let mut client = CelerityPeer::new(local_config(SocketType::Req, SecurityRole::Client));
         let mut server = CelerityPeer::new(local_config(SocketType::Rep, SecurityRole::Server));
-        let _ = pump(&mut client, &mut server).unwrap();
+        let _ = ok(pump(&mut client, &mut server));
 
-        let err = client
-            .handle_input_bytes(
-                encode_command(Command::Error(Bytes::from_static(b"boom"))).unwrap(),
-            )
-            .unwrap_err();
-        assert_eq!(err, ProtocolError::RemoteError("boom".to_owned()));
+        let result = client.handle_input_bytes(ok(encode_command(Command::Error(
+            Bytes::from_static(b"boom"),
+        ))));
+        let remote_error = err(result);
+        assert_eq!(remote_error, ProtocolError::RemoteError("boom".to_owned()));
         assert_eq!(
-            client
-                .submit(&OutboundItem::Message(vec![Bytes::from_static(b"again")]))
-                .unwrap_err(),
+            err(client.submit(&OutboundItem::Message(vec![Bytes::from_static(b"again",)]))),
             ProtocolError::RemoteError("boom".to_owned())
         );
     }
@@ -604,17 +616,16 @@ mod tests {
     fn command_frames_cannot_interrupt_a_multipart_message() {
         let mut client = CelerityPeer::new(local_config(SocketType::Req, SecurityRole::Client));
         let mut server = CelerityPeer::new(local_config(SocketType::Rep, SecurityRole::Server));
-        let _ = pump(&mut client, &mut server).unwrap();
+        let _ = ok(pump(&mut client, &mut server));
 
-        let mut frames =
-            encode_message_frames(&[Bytes::from_static(b"one"), Bytes::from_static(b"two")])
-                .unwrap();
-        server.handle_input_bytes(frames.remove(0)).unwrap();
+        let mut frames = ok(encode_message_frames(&[
+            Bytes::from_static(b"one"),
+            Bytes::from_static(b"two"),
+        ]));
+        ok(server.handle_input_bytes(frames.remove(0)));
 
         assert_eq!(
-            server
-                .handle_input_bytes(encode_command(Command::Subscribe(Bytes::new())).unwrap())
-                .unwrap_err(),
+            err(server.handle_input_bytes(ok(encode_command(Command::Subscribe(Bytes::new(),))))),
             ProtocolError::InvalidCommandFrame
         );
     }
@@ -630,7 +641,7 @@ mod tests {
         );
         let mut server = CelerityPeer::new(non_local_curve(SocketType::Rep, SecurityRole::Server));
 
-        let err = pump(&mut client, &mut server).unwrap_err();
+        let err = err(pump(&mut client, &mut server));
         assert_eq!(err, ProtocolError::CurveAuthenticationFailed);
     }
 
@@ -645,7 +656,7 @@ mod tests {
                 .with_security(SecurityConfig::curve().with_curve_config(curve)),
         );
 
-        let err = pump(&mut client, &mut server).unwrap_err();
+        let err = err(pump(&mut client, &mut server));
         assert_eq!(err, ProtocolError::CurveAuthenticationFailed);
     }
 }

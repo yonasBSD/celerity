@@ -18,13 +18,34 @@ use tokio::time::timeout;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 
+fn ok<T, E: core::fmt::Debug>(result: Result<T, E>) -> T {
+    match result {
+        Ok(value) => value,
+        Err(err) => panic!("expected Ok(..), got Err({err:?})"),
+    }
+}
+
+fn err<T, E>(result: Result<T, E>) -> E {
+    match result {
+        Ok(_) => panic!("expected Err(..), got Ok(..)"),
+        Err(err) => err,
+    }
+}
+
+fn some<T>(value: Option<T>) -> T {
+    match value {
+        Some(value) => value,
+        None => panic!("expected Some(..), got None"),
+    }
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tokio_celerity_delivers_subscription_events_over_tcp() {
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let endpoint = listener.local_addr().unwrap().to_string();
+    let listener = ok(TcpListener::bind("127.0.0.1:0").await);
+    let endpoint = ok(listener.local_addr()).to_string();
 
     let server = tokio::spawn(async move {
-        let (stream, addr) = listener.accept().await.unwrap();
+        let (stream, addr) = ok(listener.accept().await);
         let transport = TransportMeta {
             kind: TransportKind::Tcp,
             link_scope: if addr.ip().is_loopback() {
@@ -34,18 +55,15 @@ async fn tokio_celerity_delivers_subscription_events_over_tcp() {
             },
             null_authorized: addr.ip().is_loopback(),
         };
-        let mut server = TokioCelerity::from_stream(
+        let server = TokioCelerity::from_stream(
             stream,
             transport,
             PeerConfig::new(SocketType::Pub, SecurityRole::Server, transport.link_scope),
-        )
-        .unwrap();
+        );
+        let mut server = ok(server);
 
         loop {
-            match timeout(Duration::from_secs(1), server.recv())
-                .await
-                .unwrap()
-            {
+            match ok(timeout(Duration::from_secs(1), server.recv()).await) {
                 Some(PeerEvent::Subscription { subscribe, topic }) => {
                     return (subscribe, topic);
                 }
@@ -58,15 +76,13 @@ async fn tokio_celerity_delivers_subscription_events_over_tcp() {
     let client = TokioCelerity::connect(
         &endpoint,
         PeerConfig::new(SocketType::Sub, SecurityRole::Client, LinkScope::Local),
-    )
-    .await
-    .unwrap();
-    client
+    );
+    let client = ok(client.await);
+    ok(client
         .send(OutboundItem::Subscribe(Bytes::from_static(b"topic")))
-        .await
-        .unwrap();
+        .await);
 
-    let (subscribe, topic) = server.await.unwrap();
+    let (subscribe, topic) = ok(server.await);
     assert!(subscribe);
     assert_eq!(topic, Bytes::from_static(b"topic"));
 }
@@ -74,11 +90,11 @@ async fn tokio_celerity_delivers_subscription_events_over_tcp() {
 #[cfg(feature = "curve")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn curve_roundtrip_over_tcp_loopback() {
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let endpoint = listener.local_addr().unwrap().to_string();
+    let listener = ok(TcpListener::bind("127.0.0.1:0").await);
+    let endpoint = ok(listener.local_addr()).to_string();
 
     let server = tokio::spawn(async move {
-        let (stream, addr) = listener.accept().await.unwrap();
+        let (stream, addr) = ok(listener.accept().await);
         let transport = TransportMeta {
             kind: TransportKind::Tcp,
             link_scope: if addr.ip().is_loopback() {
@@ -90,22 +106,18 @@ async fn curve_roundtrip_over_tcp_loopback() {
         };
         let config = PeerConfig::new(SocketType::Rep, SecurityRole::Server, transport.link_scope)
             .with_security(SecurityConfig::curve());
-        let mut server = TokioCelerity::from_stream(stream, transport, config).unwrap();
+        let mut server = ok(TokioCelerity::from_stream(stream, transport, config));
 
         loop {
-            match timeout(Duration::from_secs(2), server.recv())
-                .await
-                .unwrap()
-            {
+            match ok(timeout(Duration::from_secs(2), server.recv()).await) {
                 Some(PeerEvent::Message(message)) => {
                     assert_eq!(message, vec![Bytes::new(), Bytes::from_static(b"ping")]);
-                    server
+                    ok(server
                         .send(OutboundItem::Message(vec![
                             Bytes::new(),
                             Bytes::from_static(b"pong"),
                         ]))
-                        .await
-                        .unwrap();
+                        .await);
                     return;
                 }
                 Some(_) => {}
@@ -114,26 +126,21 @@ async fn curve_roundtrip_over_tcp_loopback() {
         }
     });
 
-    let mut client = TokioCelerity::connect(
+    let client = TokioCelerity::connect(
         &endpoint,
         PeerConfig::new(SocketType::Req, SecurityRole::Client, LinkScope::Local)
             .with_security(SecurityConfig::curve()),
-    )
-    .await
-    .unwrap();
-    client
+    );
+    let mut client = ok(client.await);
+    ok(client
         .send(OutboundItem::Message(vec![
             Bytes::new(),
             Bytes::from_static(b"ping"),
         ]))
-        .await
-        .unwrap();
+        .await);
 
     loop {
-        match timeout(Duration::from_secs(2), client.recv())
-            .await
-            .unwrap()
-        {
+        match ok(timeout(Duration::from_secs(2), client.recv()).await) {
             Some(PeerEvent::Message(message)) => {
                 assert_eq!(message, vec![Bytes::new(), Bytes::from_static(b"pong")]);
                 break;
@@ -143,17 +150,17 @@ async fn curve_roundtrip_over_tcp_loopback() {
         }
     }
 
-    server.await.unwrap();
+    ok(server.await);
 }
 
 #[cfg(feature = "curve")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn curve_handshake_timeout_is_enforced() {
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let endpoint = listener.local_addr().unwrap().to_string();
+    let listener = ok(TcpListener::bind("127.0.0.1:0").await);
+    let endpoint = ok(listener.local_addr()).to_string();
 
     let server = tokio::spawn(async move {
-        let (_stream, _) = listener.accept().await.unwrap();
+        let (_stream, _) = ok(listener.accept().await);
         tokio::time::sleep(Duration::from_millis(200)).await;
     });
 
@@ -163,25 +170,24 @@ async fn curve_handshake_timeout_is_enforced() {
         &endpoint,
         PeerConfig::new(SocketType::Req, SecurityRole::Client, LinkScope::Local)
             .with_security(SecurityConfig::curve().with_curve_config(curve)),
-    )
-    .await
-    .unwrap();
+    );
+    let client = ok(client.await);
 
-    let err = client.join().await.unwrap_err();
+    let err = err(client.join().await);
     assert!(matches!(err, TokioCelerityError::HandshakeTimeout));
-    server.await.unwrap();
+    ok(server.await);
 }
 
 #[cfg(feature = "curve")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn curve_keypair_mismatch_is_rejected_early() {
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
+    let listener = ok(TcpListener::bind("127.0.0.1:0").await);
+    let addr = ok(listener.local_addr());
     let accepted = tokio::spawn(async move {
-        let (_stream, _) = listener.accept().await.unwrap();
+        let (_stream, _) = ok(listener.accept().await);
     });
 
-    let stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+    let stream = ok(tokio::net::TcpStream::connect(addr).await);
     let mut curve = CurveConfig::default().with_generated_keypair();
     curve.local_static_keypair.public[0] ^= 0x01;
     let err = match TokioCelerity::from_stream(
@@ -202,16 +208,16 @@ async fn curve_keypair_mismatch_is_rejected_early() {
         err,
         TokioCelerityError::Protocol(ProtocolError::InvalidCurveKeyPair)
     ));
-    accepted.await.unwrap();
+    ok(accepted.await);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn drop_newest_drops_pre_auth_messages_instead_of_blocking() {
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let endpoint = listener.local_addr().unwrap().to_string();
+    let listener = ok(TcpListener::bind("127.0.0.1:0").await);
+    let endpoint = ok(listener.local_addr()).to_string();
 
     let server = tokio::spawn(async move {
-        let (_stream, _) = listener.accept().await.unwrap();
+        let (_stream, _) = ok(listener.accept().await);
         tokio::time::sleep(Duration::from_millis(150)).await;
     });
 
@@ -222,187 +228,126 @@ async fn drop_newest_drops_pre_auth_messages_instead_of_blocking() {
     let client = TokioCelerity::connect(
         &endpoint,
         PeerConfig::new(SocketType::Pub, SecurityRole::Client, LinkScope::Local).with_hwm(hwm),
-    )
-    .await
-    .unwrap();
+    );
+    let client = ok(client.await);
 
-    timeout(
+    ok(ok(timeout(
         Duration::from_millis(100),
         client.send(OutboundItem::Message(vec![Bytes::from_static(b"first")])),
     )
-    .await
-    .unwrap()
-    .unwrap();
-    timeout(
+    .await));
+    ok(ok(timeout(
         Duration::from_millis(100),
         client.send(OutboundItem::Message(vec![Bytes::from_static(b"second")])),
     )
-    .await
-    .unwrap()
-    .unwrap();
+    .await));
 
-    let _ = timeout(Duration::from_secs(1), client.join())
-        .await
-        .unwrap();
-    server.await.unwrap();
+    let _ = ok(timeout(Duration::from_secs(1), client.join()).await);
+    ok(server.await);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn pub_sub_roundtrip_over_tcp() {
-    let mut publisher = PubSocket::bind("127.0.0.1:0").await.unwrap();
+    let mut publisher = ok(PubSocket::bind("127.0.0.1:0").await);
     let endpoint = publisher.local_addr().to_string();
-    let mut subscriber = SubSocket::connect(&endpoint).await.unwrap();
+    let mut subscriber = ok(SubSocket::connect(&endpoint).await);
 
-    subscriber.subscribe(Bytes::new()).await.unwrap();
-    assert!(
-        publisher
-            .wait_for_subscriber(Duration::from_secs(1))
-            .await
-            .unwrap()
-    );
+    ok(subscriber.subscribe(Bytes::new()).await);
+    let has_subscriber = ok(publisher.wait_for_subscriber(Duration::from_secs(1)).await);
+    assert!(has_subscriber);
 
-    publisher
-        .send(vec![Bytes::from_static(b"hello")])
-        .await
-        .unwrap();
+    ok(publisher.send(vec![Bytes::from_static(b"hello")]).await);
 
-    let message = timeout(Duration::from_secs(1), subscriber.recv())
-        .await
-        .unwrap()
-        .unwrap();
+    let message = ok(ok(timeout(Duration::from_secs(1), subscriber.recv()).await));
     assert_eq!(message, vec![Bytes::from_static(b"hello")]);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn publisher_send_without_subscribers_is_a_noop() {
-    let publisher = PubSocket::bind("127.0.0.1:0").await.unwrap();
-    publisher
-        .send(vec![Bytes::from_static(b"orphaned")])
-        .await
-        .unwrap();
+    let publisher = ok(PubSocket::bind("127.0.0.1:0").await);
+    ok(publisher.send(vec![Bytes::from_static(b"orphaned")]).await);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn wait_for_subscriber_times_out_when_no_subscribers_arrive() {
-    let mut publisher = PubSocket::bind("127.0.0.1:0").await.unwrap();
+    let mut publisher = ok(PubSocket::bind("127.0.0.1:0").await);
 
-    assert!(
-        !publisher
-            .wait_for_subscriber(Duration::from_millis(100))
-            .await
-            .unwrap()
-    );
+    let has_subscriber = ok(publisher
+        .wait_for_subscriber(Duration::from_millis(100))
+        .await);
+    assert!(!has_subscriber);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn req_rep_roundtrip_over_tcp() {
-    let mut responder = RepSocket::bind("127.0.0.1:0").await.unwrap();
+    let mut responder = ok(RepSocket::bind("127.0.0.1:0").await);
     let endpoint = responder.local_addr().to_string();
-    let requester = ReqSocket::connect(&endpoint).await.unwrap();
+    let requester = ok(ReqSocket::connect(&endpoint).await);
 
     let server = tokio::spawn(async move {
-        let message = responder.recv().await.unwrap();
+        let message = ok(responder.recv().await);
         assert_eq!(message, vec![Bytes::from_static(b"ping")]);
-        responder
-            .reply(vec![Bytes::from_static(b"pong")])
-            .await
-            .unwrap();
+        ok(responder.reply(vec![Bytes::from_static(b"pong")]).await);
     });
 
-    let reply = requester
-        .request(vec![Bytes::from_static(b"ping")])
-        .await
-        .unwrap();
+    let reply = ok(requester.request(vec![Bytes::from_static(b"ping")]).await);
     assert_eq!(reply, vec![Bytes::from_static(b"pong")]);
 
-    server.await.unwrap();
+    ok(server.await);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn rep_socket_keeps_progress_with_two_clients() {
-    let mut responder = RepSocket::bind("127.0.0.1:0").await.unwrap();
+    let mut responder = ok(RepSocket::bind("127.0.0.1:0").await);
     let endpoint = responder.local_addr().to_string();
-    let requester_one = ReqSocket::connect(&endpoint).await.unwrap();
-    let requester_two = ReqSocket::connect(&endpoint).await.unwrap();
+    let requester_one = ok(ReqSocket::connect(&endpoint).await);
+    let requester_two = ok(ReqSocket::connect(&endpoint).await);
 
     let first = tokio::spawn(async move {
-        requester_one
+        ok(requester_one
             .request(vec![Bytes::from_static(b"one")])
-            .await
-            .unwrap()
+            .await)
     });
 
-    let first_message = timeout(Duration::from_secs(1), responder.recv())
-        .await
-        .unwrap()
-        .unwrap();
+    let first_message = ok(ok(timeout(Duration::from_secs(1), responder.recv()).await));
     assert_eq!(first_message, vec![Bytes::from_static(b"one")]);
 
     let second = tokio::spawn(async move {
-        requester_two
+        ok(requester_two
             .request(vec![Bytes::from_static(b"two")])
-            .await
-            .unwrap()
+            .await)
     });
 
     tokio::time::sleep(Duration::from_millis(50)).await;
-    responder
-        .reply(vec![Bytes::from_static(b"ack-one")])
-        .await
-        .unwrap();
+    ok(responder.reply(vec![Bytes::from_static(b"ack-one")]).await);
 
-    let second_message = timeout(Duration::from_secs(1), responder.recv())
-        .await
-        .unwrap()
-        .unwrap();
+    let second_message = ok(ok(timeout(Duration::from_secs(1), responder.recv()).await));
     assert_eq!(second_message, vec![Bytes::from_static(b"two")]);
 
-    responder
-        .reply(vec![Bytes::from_static(b"ack-two")])
-        .await
-        .unwrap();
+    ok(responder.reply(vec![Bytes::from_static(b"ack-two")]).await);
 
-    assert_eq!(first.await.unwrap(), vec![Bytes::from_static(b"ack-one")]);
-    assert_eq!(second.await.unwrap(), vec![Bytes::from_static(b"ack-two")]);
+    assert_eq!(ok(first.await), vec![Bytes::from_static(b"ack-one")]);
+    assert_eq!(ok(second.await), vec![Bytes::from_static(b"ack-two")]);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn sub_cancel_stops_future_deliveries() {
-    let mut publisher = PubSocket::bind("127.0.0.1:0").await.unwrap();
+    let mut publisher = ok(PubSocket::bind("127.0.0.1:0").await);
     let endpoint = publisher.local_addr().to_string();
-    let mut subscriber = SubSocket::connect(&endpoint).await.unwrap();
+    let mut subscriber = ok(SubSocket::connect(&endpoint).await);
 
-    subscriber
-        .subscribe(Bytes::from_static(b"topic"))
-        .await
-        .unwrap();
-    assert!(
-        publisher
-            .wait_for_subscriber(Duration::from_secs(1))
-            .await
-            .unwrap()
-    );
+    ok(subscriber.subscribe(Bytes::from_static(b"topic")).await);
+    let has_subscriber = ok(publisher.wait_for_subscriber(Duration::from_secs(1)).await);
+    assert!(has_subscriber);
 
-    publisher
-        .send(vec![Bytes::from_static(b"topic-one")])
-        .await
-        .unwrap();
-    let first = timeout(Duration::from_secs(1), subscriber.recv())
-        .await
-        .unwrap()
-        .unwrap();
+    ok(publisher.send(vec![Bytes::from_static(b"topic-one")]).await);
+    let first = ok(ok(timeout(Duration::from_secs(1), subscriber.recv()).await));
     assert_eq!(first, vec![Bytes::from_static(b"topic-one")]);
 
-    subscriber
-        .cancel(Bytes::from_static(b"topic"))
-        .await
-        .unwrap();
+    ok(subscriber.cancel(Bytes::from_static(b"topic")).await);
     tokio::time::sleep(Duration::from_millis(100)).await;
 
-    publisher
-        .send(vec![Bytes::from_static(b"topic-two")])
-        .await
-        .unwrap();
+    ok(publisher.send(vec![Bytes::from_static(b"topic-two")]).await);
     assert!(
         timeout(Duration::from_millis(200), subscriber.recv())
             .await
@@ -415,32 +360,22 @@ async fn sub_cancel_stops_future_deliveries() {
 async fn ipc_pub_sub_roundtrip_and_cleanup() {
     let path = unique_ipc_path("pub-sub");
     let endpoint = format!("ipc://{}", path.display());
-    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    ok(std::fs::create_dir_all(some(path.parent())));
 
     {
-        let mut publisher = PubSocket::bind(&endpoint).await.unwrap();
-        let mut subscriber = SubSocket::connect(&endpoint).await.unwrap();
-        subscriber.subscribe(Bytes::new()).await.unwrap();
-        assert!(
-            publisher
-                .wait_for_subscriber(Duration::from_secs(1))
-                .await
-                .unwrap()
-        );
-        publisher
-            .send(vec![Bytes::from_static(b"hello-ipc")])
-            .await
-            .unwrap();
-        let message = timeout(Duration::from_secs(1), subscriber.recv())
-            .await
-            .unwrap()
-            .unwrap();
+        let mut publisher = ok(PubSocket::bind(&endpoint).await);
+        let mut subscriber = ok(SubSocket::connect(&endpoint).await);
+        ok(subscriber.subscribe(Bytes::new()).await);
+        let has_subscriber = ok(publisher.wait_for_subscriber(Duration::from_secs(1)).await);
+        assert!(has_subscriber);
+        ok(publisher.send(vec![Bytes::from_static(b"hello-ipc")]).await);
+        let message = ok(ok(timeout(Duration::from_secs(1), subscriber.recv()).await));
         assert_eq!(message, vec![Bytes::from_static(b"hello-ipc")]);
     }
 
     tokio::time::sleep(Duration::from_millis(100)).await;
     assert!(!path.exists(), "IPC socket file should be removed on drop");
-    let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    let _ = std::fs::remove_dir_all(some(path.parent()));
 }
 
 #[cfg(unix)]
@@ -448,12 +383,12 @@ async fn ipc_pub_sub_roundtrip_and_cleanup() {
 async fn ipc_stale_socket_is_replaced() {
     let path = unique_ipc_path("stale");
     let endpoint = format!("ipc://{}", path.display());
-    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-    let stale = std::os::unix::net::UnixListener::bind(&path).unwrap();
+    ok(std::fs::create_dir_all(some(path.parent())));
+    let stale = ok(std::os::unix::net::UnixListener::bind(&path));
     drop(stale);
 
     {
-        let socket = PubSocket::bind(&endpoint).await.unwrap();
+        let socket = ok(PubSocket::bind(&endpoint).await);
         assert!(path.exists());
         drop(socket);
     }
@@ -463,15 +398,18 @@ async fn ipc_stale_socket_is_replaced() {
         !path.exists(),
         "stale socket replacement should still clean up"
     );
-    let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    let _ = std::fs::remove_dir_all(some(path.parent()));
 }
 
 #[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn ipc_strict_auth_rejects_world_writable_parent() {
     let parent = unique_ipc_parent("bad-parent");
-    std::fs::create_dir_all(&parent).unwrap();
-    std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o777)).unwrap();
+    ok(std::fs::create_dir_all(&parent));
+    ok(std::fs::set_permissions(
+        &parent,
+        std::fs::Permissions::from_mode(0o777),
+    ));
     let path = parent.join("celerity.sock");
     let endpoint = format!("ipc://{}", path.display());
 
@@ -493,10 +431,7 @@ fn unique_ipc_path(name: &str) -> std::path::PathBuf {
 #[cfg(unix)]
 fn unique_ipc_parent(name: &str) -> std::path::PathBuf {
     let mut path = std::path::PathBuf::from("/tmp");
-    let unique = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
+    let unique = ok(SystemTime::now().duration_since(UNIX_EPOCH)).as_nanos();
     path.push(format!("cel-{name}-{}-{unique}", std::process::id()));
     path
 }

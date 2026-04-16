@@ -519,56 +519,64 @@ mod tests {
     use super::{PatternAction, PubCore, RepCore, ReqCore, SubCore};
     use crate::{OutboundItem, PeerEvent, ProtocolError};
 
+    fn ok<T, E: core::fmt::Debug>(result: Result<T, E>) -> T {
+        match result {
+            Ok(value) => value,
+            Err(err) => panic!("expected Ok(..), got Err({err:?})"),
+        }
+    }
+
+    fn err<T, E>(result: Result<T, E>) -> E {
+        match result {
+            Ok(_) => panic!("expected Err(..), got Ok(..)"),
+            Err(err) => err,
+        }
+    }
+
     #[test]
     fn pubcore_tracks_additive_subscriptions() {
         let mut core = PubCore::<u8>::new();
-        core.on_peer_event(
+        ok(core.on_peer_event(
             1,
             PeerEvent::Subscription {
                 subscribe: true,
                 topic: Bytes::from_static(b"ab"),
             },
-        )
-        .unwrap();
-        core.on_peer_event(
+        ));
+        ok(core.on_peer_event(
             1,
             PeerEvent::Subscription {
                 subscribe: true,
                 topic: Bytes::from_static(b"ab"),
             },
-        )
-        .unwrap();
-        core.on_peer_event(
+        ));
+        ok(core.on_peer_event(
             1,
             PeerEvent::Subscription {
                 subscribe: false,
                 topic: Bytes::from_static(b"ab"),
             },
-        )
-        .unwrap();
+        ));
 
-        let actions = core
-            .publish(&vec![
-                Bytes::from_static(b"abc"),
-                Bytes::from_static(b"body"),
-            ])
-            .unwrap();
+        let actions = ok(core.publish(&vec![
+            Bytes::from_static(b"abc"),
+            Bytes::from_static(b"body"),
+        ]));
         assert_eq!(actions.len(), 1);
     }
 
     #[test]
     fn pubcore_empty_subscription_matches_all() {
         let mut core = PubCore::<u8>::new();
-        core.on_peer_event(
+        ok(core.on_peer_event(
             7,
             PeerEvent::Subscription {
                 subscribe: true,
                 topic: Bytes::new(),
             },
-        )
-        .unwrap();
+        ));
 
-        let actions = core.publish(&vec![Bytes::from_static(b"topic")]).unwrap();
+        let actions = ok(core.publish(&vec![Bytes::from_static(b"topic")]));
         assert_eq!(
             actions,
             vec![PatternAction::Send {
@@ -581,7 +589,7 @@ mod tests {
     #[test]
     fn subcore_replays_subscriptions_to_new_peers() {
         let mut core = SubCore::<u8>::new();
-        let _ = core.subscribe(&Bytes::from_static(b"alpha")).unwrap();
+        let _ = ok(core.subscribe(&Bytes::from_static(b"alpha")));
         let actions = core.add_peer(3);
         assert_eq!(
             actions,
@@ -596,11 +604,10 @@ mod tests {
     fn subcore_filters_inbound_messages() {
         let mut core = SubCore::<u8>::new();
         core.add_peer(1);
-        let _ = core.subscribe(&Bytes::from_static(b"ab")).unwrap();
+        let _ = ok(core.subscribe(&Bytes::from_static(b"ab")));
 
-        let allowed = core
-            .on_peer_event(1, PeerEvent::Message(vec![Bytes::from_static(b"abc")]))
-            .unwrap();
+        let allowed = core.on_peer_event(1, PeerEvent::Message(vec![Bytes::from_static(b"abc")]));
+        let allowed = ok(allowed);
         assert_eq!(
             allowed,
             vec![PatternAction::Deliver {
@@ -609,9 +616,8 @@ mod tests {
             }]
         );
 
-        let blocked = core
-            .on_peer_event(1, PeerEvent::Message(vec![Bytes::from_static(b"zzz")]))
-            .unwrap();
+        let blocked = core.on_peer_event(1, PeerEvent::Message(vec![Bytes::from_static(b"zzz")]));
+        let blocked = ok(blocked);
         assert!(blocked.is_empty());
     }
 
@@ -619,9 +625,8 @@ mod tests {
     fn subcore_can_disable_inbound_filtering() {
         let mut core = SubCore::<u8>::new().with_filter_inbound(false);
 
-        let delivered = core
-            .on_peer_event(1, PeerEvent::Message(vec![Bytes::from_static(b"zzz")]))
-            .unwrap();
+        let delivered = core.on_peer_event(1, PeerEvent::Message(vec![Bytes::from_static(b"zzz")]));
+        let delivered = ok(delivered);
         assert_eq!(
             delivered,
             vec![PatternAction::Deliver {
@@ -636,7 +641,7 @@ mod tests {
         let mut core = SubCore::<u8>::new();
 
         assert_eq!(
-            core.cancel(&Bytes::from_static(b"alpha")).unwrap_err(),
+            err(core.cancel(&Bytes::from_static(b"alpha"))),
             ProtocolError::UnknownSubscription
         );
     }
@@ -647,7 +652,7 @@ mod tests {
         core.add_peer(1);
         core.add_peer(2);
 
-        let first = core.send(vec![Bytes::from_static(b"one")]).unwrap();
+        let first = ok(core.send(vec![Bytes::from_static(b"one")]));
         assert_eq!(
             first,
             PatternAction::Send {
@@ -656,20 +661,18 @@ mod tests {
             }
         );
 
-        let ignored = core
-            .on_peer_event(
-                2,
-                PeerEvent::Message(vec![Bytes::new(), Bytes::from_static(b"wrong")]),
-            )
-            .unwrap();
+        let ignored = core.on_peer_event(
+            2,
+            PeerEvent::Message(vec![Bytes::new(), Bytes::from_static(b"wrong")]),
+        );
+        let ignored = ok(ignored);
         assert!(ignored.is_empty());
 
-        let delivered = core
-            .on_peer_event(
-                1,
-                PeerEvent::Message(vec![Bytes::new(), Bytes::from_static(b"reply")]),
-            )
-            .unwrap();
+        let delivered = core.on_peer_event(
+            1,
+            PeerEvent::Message(vec![Bytes::new(), Bytes::from_static(b"reply")]),
+        );
+        let delivered = ok(delivered);
         assert_eq!(
             delivered,
             vec![PatternAction::Deliver {
@@ -685,14 +688,13 @@ mod tests {
         core.add_peer(1);
         core.add_peer(2);
 
-        let first = core.send(vec![Bytes::from_static(b"one")]).unwrap();
-        let _ = core
-            .on_peer_event(
-                1,
-                PeerEvent::Message(vec![Bytes::new(), Bytes::from_static(b"ok")]),
-            )
-            .unwrap();
-        let second = core.send(vec![Bytes::from_static(b"two")]).unwrap();
+        let first = ok(core.send(vec![Bytes::from_static(b"one")]));
+        let reply = core.on_peer_event(
+            1,
+            PeerEvent::Message(vec![Bytes::new(), Bytes::from_static(b"ok")]),
+        );
+        let _ = ok(reply);
+        let second = ok(core.send(vec![Bytes::from_static(b"two")]));
 
         assert_eq!(
             first,
@@ -714,10 +716,10 @@ mod tests {
     fn reqcore_rejects_strict_alternation_violations() {
         let mut core = ReqCore::<u8>::new();
         core.add_peer(1);
-        let _ = core.send(vec![Bytes::from_static(b"one")]).unwrap();
+        let _ = ok(core.send(vec![Bytes::from_static(b"one")]));
 
         assert_eq!(
-            core.send(vec![Bytes::from_static(b"two")]).unwrap_err(),
+            err(core.send(vec![Bytes::from_static(b"two")])),
             ProtocolError::ReqStateViolation(
                 "cannot send a new request before receiving the reply",
             )
@@ -729,7 +731,7 @@ mod tests {
         let mut core = ReqCore::<u8>::new();
 
         assert_eq!(
-            core.send(vec![Bytes::from_static(b"one")]).unwrap_err(),
+            err(core.send(vec![Bytes::from_static(b"one")])),
             ProtocolError::NoAvailablePeers
         );
     }
@@ -738,20 +740,18 @@ mod tests {
     fn reqcore_rejects_replies_without_a_delimiter_or_body() {
         let mut core = ReqCore::<u8>::new();
         core.add_peer(1);
-        let _ = core.send(vec![Bytes::from_static(b"one")]).unwrap();
+        let _ = ok(core.send(vec![Bytes::from_static(b"one")]));
 
         assert_eq!(
-            core.on_peer_event(1, PeerEvent::Message(vec![Bytes::from_static(b"bad")]))
-                .unwrap_err(),
+            err(core.on_peer_event(1, PeerEvent::Message(vec![Bytes::from_static(b"bad")]),)),
             ProtocolError::MissingEnvelopeDelimiter
         );
 
         let mut core = ReqCore::<u8>::new();
         core.add_peer(1);
-        let _ = core.send(vec![Bytes::from_static(b"one")]).unwrap();
+        let _ = ok(core.send(vec![Bytes::from_static(b"one")]));
         assert_eq!(
-            core.on_peer_event(1, PeerEvent::Message(vec![Bytes::new()]))
-                .unwrap_err(),
+            err(core.on_peer_event(1, PeerEvent::Message(vec![Bytes::new()]))),
             ProtocolError::MissingBodyFrames
         );
     }
@@ -761,16 +761,15 @@ mod tests {
         let mut core = RepCore::<u8>::new();
         core.add_peer(9);
 
-        let delivered = core
-            .on_peer_event(
-                9,
-                PeerEvent::Message(vec![
-                    Bytes::from_static(b"route"),
-                    Bytes::new(),
-                    Bytes::from_static(b"body"),
-                ]),
-            )
-            .unwrap();
+        let delivered = core.on_peer_event(
+            9,
+            PeerEvent::Message(vec![
+                Bytes::from_static(b"route"),
+                Bytes::new(),
+                Bytes::from_static(b"body"),
+            ]),
+        );
+        let delivered = ok(delivered);
         assert_eq!(
             delivered,
             vec![PatternAction::Deliver {
@@ -779,7 +778,7 @@ mod tests {
             }]
         );
 
-        let replied = core.reply(vec![Bytes::from_static(b"ok")]).unwrap();
+        let replied = ok(core.reply(vec![Bytes::from_static(b"ok")]));
         assert_eq!(
             replied,
             vec![PatternAction::Send {
@@ -799,12 +798,11 @@ mod tests {
         core.add_peer(1);
         core.add_peer(2);
 
-        let first = core
-            .on_peer_event(
-                1,
-                PeerEvent::Message(vec![Bytes::new(), Bytes::from_static(b"one")]),
-            )
-            .unwrap();
+        let first = core.on_peer_event(
+            1,
+            PeerEvent::Message(vec![Bytes::new(), Bytes::from_static(b"one")]),
+        );
+        let first = ok(first);
         assert_eq!(
             first,
             vec![PatternAction::Deliver {
@@ -813,23 +811,21 @@ mod tests {
             }]
         );
 
-        let none = core
-            .on_peer_event(
-                1,
-                PeerEvent::Message(vec![Bytes::new(), Bytes::from_static(b"two")]),
-            )
-            .unwrap();
+        let none = core.on_peer_event(
+            1,
+            PeerEvent::Message(vec![Bytes::new(), Bytes::from_static(b"two")]),
+        );
+        let none = ok(none);
         assert!(none.is_empty());
 
-        let none = core
-            .on_peer_event(
-                2,
-                PeerEvent::Message(vec![Bytes::new(), Bytes::from_static(b"three")]),
-            )
-            .unwrap();
+        let none = core.on_peer_event(
+            2,
+            PeerEvent::Message(vec![Bytes::new(), Bytes::from_static(b"three")]),
+        );
+        let none = ok(none);
         assert!(none.is_empty());
 
-        let after_reply = core.reply(vec![Bytes::from_static(b"ok")]).unwrap();
+        let after_reply = ok(core.reply(vec![Bytes::from_static(b"ok")]));
         assert_eq!(
             after_reply[1],
             PatternAction::Deliver {
@@ -844,7 +840,7 @@ mod tests {
         let mut core = RepCore::<u8>::new();
 
         assert_eq!(
-            core.reply(vec![Bytes::from_static(b"ok")]).unwrap_err(),
+            err(core.reply(vec![Bytes::from_static(b"ok")])),
             ProtocolError::RepStateViolation("cannot send a reply before receiving a request",)
         );
     }
@@ -855,12 +851,11 @@ mod tests {
         core.add_peer(1);
         core.add_peer(2);
 
-        let first = core
-            .on_peer_event(
-                1,
-                PeerEvent::Message(vec![Bytes::new(), Bytes::from_static(b"one")]),
-            )
-            .unwrap();
+        let first = core.on_peer_event(
+            1,
+            PeerEvent::Message(vec![Bytes::new(), Bytes::from_static(b"one")]),
+        );
+        let first = ok(first);
         assert_eq!(
             first,
             vec![PatternAction::Deliver {
@@ -869,15 +864,14 @@ mod tests {
             }]
         );
 
-        let second = core
-            .on_peer_event(
-                2,
-                PeerEvent::Message(vec![Bytes::new(), Bytes::from_static(b"two")]),
-            )
-            .unwrap();
+        let second = core.on_peer_event(
+            2,
+            PeerEvent::Message(vec![Bytes::new(), Bytes::from_static(b"two")]),
+        );
+        let second = ok(second);
         assert!(second.is_empty());
 
-        let actions = core.remove_peer(1).unwrap();
+        let actions = ok(core.remove_peer(1));
         assert_eq!(
             actions,
             vec![PatternAction::Deliver {

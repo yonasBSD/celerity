@@ -450,10 +450,31 @@ mod tests {
         SecurityRole, SocketType,
     };
 
+    fn ok<T, E: core::fmt::Debug>(result: Result<T, E>) -> T {
+        match result {
+            Ok(value) => value,
+            Err(err) => panic!("expected Ok(..), got Err({err:?})"),
+        }
+    }
+
+    fn err<T, E>(result: Result<T, E>) -> E {
+        match result {
+            Ok(_) => panic!("expected Err(..), got Ok(..)"),
+            Err(err) => err,
+        }
+    }
+
+    fn some<T>(value: Option<T>) -> T {
+        match value {
+            Some(value) => value,
+            None => panic!("expected Some(..), got None"),
+        }
+    }
+
     #[test]
     fn greeting_roundtrip() {
         let config = PeerConfig::new(SocketType::Req, SecurityRole::Client, LinkScope::Local);
-        let greeting = decode_greeting(encode_greeting(&config)).unwrap();
+        let greeting = ok(decode_greeting(encode_greeting(&config)));
         assert_eq!(
             greeting,
             Greeting {
@@ -466,43 +487,42 @@ mod tests {
     #[test]
     fn ready_metadata_roundtrip() {
         let mut metadata = MetadataMap::new();
-        metadata.insert("Socket-Type", "REQ").unwrap();
-        metadata
-            .insert("Identity", Bytes::from_static(b"alpha"))
-            .unwrap();
-        metadata
-            .insert("X-Test", Bytes::from_static(b"value"))
-            .unwrap();
+        ok(metadata.insert("Socket-Type", "REQ"));
+        ok(metadata.insert("Identity", Bytes::from_static(b"alpha")));
+        ok(metadata.insert("X-Test", Bytes::from_static(b"value")));
 
-        let encoded = encode_command(Command::Ready(encode_metadata(&metadata).unwrap())).unwrap();
+        let encoded = ok(encode_command(Command::Ready(ok(encode_metadata(
+            &metadata,
+        )))));
         let mut input = InputBuffer::default();
         input.push(encoded);
 
-        let frame = try_decode_frame(&mut input).unwrap().unwrap();
+        let frame = some(ok(try_decode_frame(&mut input)));
         assert_eq!(frame.flags, FrameFlags::COMMAND);
-        let decoded = decode_command(frame.body).unwrap();
+        let decoded = ok(decode_command(frame.body));
         let Command::Ready(bytes) = decoded else {
             panic!("expected ready command");
         };
-        assert_eq!(decode_metadata(bytes).unwrap(), metadata);
+        assert_eq!(ok(decode_metadata(bytes)), metadata);
     }
 
     #[test]
     fn short_and_long_frames_roundtrip() {
-        let frames =
-            encode_message_frames(&[Bytes::from_static(b"short"), Bytes::from(vec![0xAB; 512])])
-                .unwrap();
+        let frames = ok(encode_message_frames(&[
+            Bytes::from_static(b"short"),
+            Bytes::from(vec![0xAB; 512]),
+        ]));
 
         let mut input = InputBuffer::default();
         for frame in &frames {
             input.push(frame.clone());
         }
 
-        let first = try_decode_frame(&mut input).unwrap().unwrap();
+        let first = some(ok(try_decode_frame(&mut input)));
         assert_eq!(first.flags, FrameFlags::MORE);
         assert_eq!(first.body, Bytes::from_static(b"short"));
 
-        let second = try_decode_frame(&mut input).unwrap().unwrap();
+        let second = some(ok(try_decode_frame(&mut input)));
         assert!(second.flags.contains(FrameFlags::LONG));
         assert_eq!(second.body, Bytes::from(vec![0xAB; 512]));
     }
@@ -512,7 +532,7 @@ mod tests {
         let mut input = InputBuffer::default();
         input.push(Bytes::from_static(&[0x80, 0x00]));
         assert_eq!(
-            try_decode_frame(&mut input).unwrap_err(),
+            err(try_decode_frame(&mut input)),
             ProtocolError::InvalidFrameFlags(0x80)
         );
     }
@@ -524,7 +544,7 @@ mod tests {
         frame.extend_from_slice(&(1_u64 << 63).to_be_bytes());
         input.push(Bytes::from(frame));
         assert_eq!(
-            try_decode_frame(&mut input).unwrap_err(),
+            err(try_decode_frame(&mut input)),
             ProtocolError::NegativeFrameLength
         );
     }
@@ -536,7 +556,7 @@ mod tests {
         let greeting = encode_greeting(&config);
         assert_eq!(greeting.len(), GREETING_SIZE);
         assert_eq!(
-            decode_greeting(greeting).unwrap().as_server,
+            ok(decode_greeting(greeting)).as_server,
             greeting_as_server(SecurityMechanism::Curve, SecurityRole::Server)
         );
     }
@@ -548,14 +568,14 @@ mod tests {
         let mut bad_signature = encode_greeting(&config).to_vec();
         bad_signature[0] ^= 0x01;
         assert_eq!(
-            decode_greeting(Bytes::from(bad_signature)).unwrap_err(),
+            err(decode_greeting(Bytes::from(bad_signature))),
             ProtocolError::InvalidGreetingSignature
         );
 
         let mut bad_version = encode_greeting(&config).to_vec();
         bad_version[10] = 9;
         assert_eq!(
-            decode_greeting(Bytes::from(bad_version)).unwrap_err(),
+            err(decode_greeting(Bytes::from(bad_version))),
             ProtocolError::UnsupportedVersion { major: 9, minor: 1 }
         );
     }
@@ -569,7 +589,7 @@ mod tests {
         field.fill(0);
         field[..5].copy_from_slice(b"CURVE");
 
-        let decoded = decode_greeting(Bytes::from(greeting)).unwrap();
+        let decoded = ok(decode_greeting(Bytes::from(greeting)));
         assert_eq!(decoded.mechanism, SecurityMechanism::Curve);
     }
 
@@ -582,7 +602,7 @@ mod tests {
         ]));
 
         assert_eq!(
-            try_decode_frame(&mut input).unwrap_err(),
+            err(try_decode_frame(&mut input)),
             ProtocolError::CommandWithMore
         );
     }
@@ -590,24 +610,23 @@ mod tests {
     #[test]
     fn command_and_metadata_decoders_reject_malformed_payloads() {
         assert_eq!(
-            decode_command(Bytes::from_static(&[3, b'O', b'K'])).unwrap_err(),
+            err(decode_command(Bytes::from_static(&[3, b'O', b'K']))),
             ProtocolError::InvalidCommandFrame
         );
         assert_eq!(
-            decode_metadata(Bytes::from_static(&[0, 0, 0, 0, 0])).unwrap_err(),
+            err(decode_metadata(Bytes::from_static(&[0, 0, 0, 0, 0]))),
             ProtocolError::InvalidCommandFrame
         );
         assert_eq!(
-            decode_metadata(Bytes::from_static(&[1, b'A', 0, 0, 0, 4, b'x'])).unwrap_err(),
+            err(decode_metadata(Bytes::from_static(&[
+                1, b'A', 0, 0, 0, 4, b'x'
+            ]))),
             ProtocolError::InvalidCommandFrame
         );
     }
 
     #[test]
     fn empty_multipart_messages_are_rejected() {
-        assert_eq!(
-            encode_message_frames(&[]).unwrap_err(),
-            ProtocolError::EmptyMessage
-        );
+        assert_eq!(err(encode_message_frames(&[])), ProtocolError::EmptyMessage);
     }
 }

@@ -7,6 +7,20 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
+fn ok<T, E: core::fmt::Debug>(result: Result<T, E>) -> T {
+    match result {
+        Ok(value) => value,
+        Err(err) => panic!("expected Ok(..), got Err({err:?})"),
+    }
+}
+
+fn some<T>(value: Option<T>) -> T {
+    match value {
+        Some(value) => value,
+        None => panic!("expected Some(..), got None"),
+    }
+}
+
 fn cel_cat_path() -> PathBuf {
     if let Ok(path) = std::env::var("CARGO_BIN_EXE_cel-cat") {
         return PathBuf::from(path);
@@ -15,8 +29,8 @@ fn cel_cat_path() -> PathBuf {
         return PathBuf::from(path);
     }
 
-    let exe = std::env::current_exe().unwrap();
-    let target_dir = exe.parent().unwrap().parent().unwrap();
+    let exe = ok(std::env::current_exe());
+    let target_dir = some(some(exe.parent()).parent());
     for candidate in ["cel-cat", "cel_cat"] {
         let path = target_dir.join(candidate);
         if path.exists() {
@@ -29,28 +43,28 @@ fn cel_cat_path() -> PathBuf {
 
 #[test]
 fn cel_cat_pub_sub_smoke() {
-    let reserved = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let endpoint = reserved.local_addr().unwrap().to_string();
+    let reserved = ok(std::net::TcpListener::bind("127.0.0.1:0"));
+    let endpoint = ok(reserved.local_addr()).to_string();
     drop(reserved);
 
     let binary = cel_cat_path();
-    let mut publisher = Command::new(&binary)
+    let publisher = Command::new(&binary)
         .args(["pub", "--linger-ms", "1500", &endpoint, "hello"])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
-        .spawn()
-        .unwrap();
+        .spawn();
+    let mut publisher = ok(publisher);
 
     thread::sleep(Duration::from_millis(150));
 
-    let mut subscriber = Command::new(&binary)
+    let subscriber = Command::new(&binary)
         .args(["sub", &endpoint])
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
-        .spawn()
-        .unwrap();
+        .spawn();
+    let mut subscriber = ok(subscriber);
 
-    let stdout = subscriber.stdout.take().unwrap();
+    let stdout = some(subscriber.stdout.take());
     let (line_tx, line_rx) = mpsc::channel();
     thread::spawn(move || {
         let mut reader = BufReader::new(stdout);
@@ -59,11 +73,8 @@ fn cel_cat_pub_sub_smoke() {
         let _ = line_tx.send(result);
     });
 
-    assert!(publisher.wait().unwrap().success());
-    let line = line_rx
-        .recv_timeout(Duration::from_secs(3))
-        .unwrap()
-        .unwrap();
+    assert!(ok(publisher.wait()).success());
+    let line = ok(ok(line_rx.recv_timeout(Duration::from_secs(3))));
     assert_eq!(line.trim_end(), "hello");
 
     let _ = subscriber.kill();
@@ -72,19 +83,19 @@ fn cel_cat_pub_sub_smoke() {
 
 #[test]
 fn cel_cat_sub_can_start_before_pub() {
-    let reserved = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let endpoint = reserved.local_addr().unwrap().to_string();
+    let reserved = ok(std::net::TcpListener::bind("127.0.0.1:0"));
+    let endpoint = ok(reserved.local_addr()).to_string();
     drop(reserved);
 
     let binary = cel_cat_path();
-    let mut subscriber = Command::new(&binary)
+    let subscriber = Command::new(&binary)
         .args(["sub", &endpoint])
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
-        .spawn()
-        .unwrap();
+        .spawn();
+    let mut subscriber = ok(subscriber);
 
-    let stdout = subscriber.stdout.take().unwrap();
+    let stdout = some(subscriber.stdout.take());
     let (line_tx, line_rx) = mpsc::channel();
     thread::spawn(move || {
         let mut reader = BufReader::new(stdout);
@@ -95,18 +106,15 @@ fn cel_cat_sub_can_start_before_pub() {
 
     thread::sleep(Duration::from_millis(500));
 
-    let mut publisher = Command::new(&binary)
+    let publisher = Command::new(&binary)
         .args(["pub", "--linger-ms", "1500", &endpoint, "hello"])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
-        .spawn()
-        .unwrap();
+        .spawn();
+    let mut publisher = ok(publisher);
 
-    assert!(publisher.wait().unwrap().success());
-    let line = line_rx
-        .recv_timeout(Duration::from_secs(4))
-        .unwrap()
-        .unwrap();
+    assert!(ok(publisher.wait()).success());
+    let line = ok(ok(line_rx.recv_timeout(Duration::from_secs(4))));
     assert_eq!(line.trim_end(), "hello");
 
     let _ = subscriber.kill();

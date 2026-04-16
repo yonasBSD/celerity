@@ -151,14 +151,21 @@ mod tests {
     };
     use crate::ProtocolError;
 
+    fn err<T, E>(result: Result<T, E>) -> E {
+        match result {
+            Ok(_) => panic!("expected Err(..), got Ok(..)"),
+            Err(err) => err,
+        }
+    }
+
     #[test]
     fn hello_and_welcome_reject_invalid_lengths() {
         assert_eq!(
-            parse_hello(Bytes::from_static(&[0; 10])).unwrap_err(),
+            err(parse_hello(Bytes::from_static(&[0; 10]))),
             ProtocolError::CurveHandshake("invalid HELLO payload")
         );
         assert_eq!(
-            parse_welcome(Bytes::from_static(&[0; 40])).unwrap_err(),
+            err(parse_welcome(Bytes::from_static(&[0; 40]))),
             ProtocolError::CurveHandshake("invalid WELCOME payload")
         );
     }
@@ -170,7 +177,7 @@ mod tests {
         body.extend_from_slice(&[0; 72]);
 
         assert_eq!(
-            decode_welcome_body(body.freeze()).unwrap_err(),
+            err(decode_welcome_body(body.freeze())),
             ProtocolError::CurveHandshake("unsupported WELCOME version")
         );
     }
@@ -178,7 +185,7 @@ mod tests {
     #[test]
     fn initiate_parsers_reject_truncated_payloads() {
         assert_eq!(
-            parse_initiate(Bytes::from_static(&[0; 20])).unwrap_err(),
+            err(parse_initiate(Bytes::from_static(&[0; 20]))),
             ProtocolError::CurveHandshake("invalid INITIATE payload")
         );
 
@@ -186,7 +193,7 @@ mod tests {
         body.extend_from_slice(&[0; 32]);
         body.put_u32(4);
         assert_eq!(
-            decode_initiate_body(body.freeze()).unwrap_err(),
+            err(decode_initiate_body(body.freeze())),
             ProtocolError::CurveHandshake("invalid INITIATE metadata")
         );
     }

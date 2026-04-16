@@ -390,6 +390,20 @@ mod tests {
         SecurityRole, SocketType,
     };
 
+    fn ok<T, E: core::fmt::Debug>(result: Result<T, E>) -> T {
+        match result {
+            Ok(value) => value,
+            Err(err) => panic!("expected Ok(..), got Err({err:?})"),
+        }
+    }
+
+    fn err<T, E>(result: Result<T, E>) -> E {
+        match result {
+            Ok(_) => panic!("expected Err(..), got Ok(..)"),
+            Err(err) => err,
+        }
+    }
+
     fn sample_channels(
         rekey_messages: u64,
         rekey_bytes: u64,
@@ -455,34 +469,34 @@ mod tests {
 
     #[test]
     fn secure_channel_roundtrips_and_rejects_replays() {
-        let (mut client, mut server) = sample_channels(0, 0).unwrap();
+        let (mut client, mut server) = ok(sample_channels(0, 0));
 
-        let payload = seal_message(&mut client, &Bytes::from_static(b"hello")).unwrap();
+        let payload = ok(seal_message(&mut client, &Bytes::from_static(b"hello")));
         assert_eq!(
-            open_message(&mut server, payload.clone()).unwrap(),
+            ok(open_message(&mut server, payload.clone())),
             Bytes::from_static(b"hello")
         );
         assert_eq!(
-            open_message(&mut server, payload).unwrap_err(),
+            err(open_message(&mut server, payload)),
             ProtocolError::CurveReplayDetected
         );
     }
 
     #[test]
     fn secure_channel_rekeys_after_message_limit() {
-        let (mut client, mut server) = sample_channels(1, 0).unwrap();
+        let (mut client, mut server) = ok(sample_channels(1, 0));
 
-        let first = seal_message(&mut client, &Bytes::from_static(b"one")).unwrap();
+        let first = ok(seal_message(&mut client, &Bytes::from_static(b"one")));
         assert_eq!(
-            open_message(&mut server, first).unwrap(),
+            ok(open_message(&mut server, first)),
             Bytes::from_static(b"one")
         );
         assert_eq!(client.send.epoch, 0);
         assert_eq!(server.recv.epoch, 0);
 
-        let second = seal_message(&mut client, &Bytes::from_static(b"two")).unwrap();
+        let second = ok(seal_message(&mut client, &Bytes::from_static(b"two")));
         assert_eq!(
-            open_message(&mut server, second).unwrap(),
+            ok(open_message(&mut server, second)),
             Bytes::from_static(b"two")
         );
         assert_eq!(client.send.epoch, 1);
