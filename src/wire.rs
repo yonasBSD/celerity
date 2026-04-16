@@ -540,4 +540,74 @@ mod tests {
             greeting_as_server(SecurityMechanism::Curve, SecurityRole::Server)
         );
     }
+
+    #[test]
+    fn greeting_rejects_invalid_signature_and_version() {
+        let config = PeerConfig::new(SocketType::Req, SecurityRole::Client, LinkScope::Local);
+
+        let mut bad_signature = encode_greeting(&config).to_vec();
+        bad_signature[0] ^= 0x01;
+        assert_eq!(
+            decode_greeting(Bytes::from(bad_signature)).unwrap_err(),
+            ProtocolError::InvalidGreetingSignature
+        );
+
+        let mut bad_version = encode_greeting(&config).to_vec();
+        bad_version[10] = 9;
+        assert_eq!(
+            decode_greeting(Bytes::from(bad_version)).unwrap_err(),
+            ProtocolError::UnsupportedVersion { major: 9, minor: 1 }
+        );
+    }
+
+    #[test]
+    fn greeting_accepts_short_curve_mechanism_marker() {
+        let config = PeerConfig::new(SocketType::Req, SecurityRole::Client, LinkScope::NonLocal)
+            .with_security(SecurityConfig::curve());
+        let mut greeting = encode_greeting(&config).to_vec();
+        let field = &mut greeting[12..12 + super::MECHANISM_FIELD_LEN];
+        field.fill(0);
+        field[..5].copy_from_slice(b"CURVE");
+
+        let decoded = decode_greeting(Bytes::from(greeting)).unwrap();
+        assert_eq!(decoded.mechanism, SecurityMechanism::Curve);
+    }
+
+    #[test]
+    fn command_frames_must_not_set_more() {
+        let mut input = InputBuffer::default();
+        input.push(Bytes::from(vec![
+            (FrameFlags::COMMAND | FrameFlags::MORE).bits(),
+            0,
+        ]));
+
+        assert_eq!(
+            try_decode_frame(&mut input).unwrap_err(),
+            ProtocolError::CommandWithMore
+        );
+    }
+
+    #[test]
+    fn command_and_metadata_decoders_reject_malformed_payloads() {
+        assert_eq!(
+            decode_command(Bytes::from_static(&[3, b'O', b'K'])).unwrap_err(),
+            ProtocolError::InvalidCommandFrame
+        );
+        assert_eq!(
+            decode_metadata(Bytes::from_static(&[0, 0, 0, 0, 0])).unwrap_err(),
+            ProtocolError::InvalidCommandFrame
+        );
+        assert_eq!(
+            decode_metadata(Bytes::from_static(&[1, b'A', 0, 0, 0, 4, b'x'])).unwrap_err(),
+            ProtocolError::InvalidCommandFrame
+        );
+    }
+
+    #[test]
+    fn empty_multipart_messages_are_rejected() {
+        assert_eq!(
+            encode_message_frames(&[]).unwrap_err(),
+            ProtocolError::EmptyMessage
+        );
+    }
 }

@@ -4,8 +4,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use bytes::Bytes;
 use celerity::io::{
-    Endpoint, PubSocket, RepSocket, ReqSocket, SubSocket, TokioCelerity, TokioCelerityError,
-    TransportKind, TransportMeta,
+    PubSocket, RepSocket, ReqSocket, SubSocket, TokioCelerity, TokioCelerityError, TransportKind,
+    TransportMeta,
 };
 #[cfg(feature = "curve")]
 use celerity::{CurveConfig, ProtocolError, SecurityConfig};
@@ -17,26 +17,6 @@ use tokio::time::timeout;
 
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn endpoint_parsing_supports_tcp_and_ipc() {
-    assert_eq!(
-        Endpoint::parse("tcp://127.0.0.1:5555").unwrap(),
-        Endpoint::Tcp("127.0.0.1:5555".to_owned())
-    );
-    assert_eq!(
-        Endpoint::parse("127.0.0.1:5555").unwrap(),
-        Endpoint::Tcp("127.0.0.1:5555".to_owned())
-    );
-
-    #[cfg(unix)]
-    assert_eq!(
-        Endpoint::parse("ipc:///tmp/celerity-test.sock")
-            .unwrap()
-            .transport_kind(),
-        TransportKind::Ipc
-    );
-}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tokio_celerity_delivers_subscription_events_over_tcp() {
@@ -303,6 +283,18 @@ async fn publisher_send_without_subscribers_is_a_noop() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn wait_for_subscriber_times_out_when_no_subscribers_arrive() {
+    let mut publisher = PubSocket::bind("127.0.0.1:0").await.unwrap();
+
+    assert!(
+        !publisher
+            .wait_for_subscriber(Duration::from_millis(100))
+            .await
+            .unwrap()
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn req_rep_roundtrip_over_tcp() {
     let mut responder = RepSocket::bind("127.0.0.1:0").await.unwrap();
     let endpoint = responder.local_addr().to_string();
@@ -372,6 +364,50 @@ async fn rep_socket_keeps_progress_with_two_clients() {
 
     assert_eq!(first.await.unwrap(), vec![Bytes::from_static(b"ack-one")]);
     assert_eq!(second.await.unwrap(), vec![Bytes::from_static(b"ack-two")]);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn sub_cancel_stops_future_deliveries() {
+    let mut publisher = PubSocket::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = publisher.local_addr().to_string();
+    let mut subscriber = SubSocket::connect(&endpoint).await.unwrap();
+
+    subscriber
+        .subscribe(Bytes::from_static(b"topic"))
+        .await
+        .unwrap();
+    assert!(
+        publisher
+            .wait_for_subscriber(Duration::from_secs(1))
+            .await
+            .unwrap()
+    );
+
+    publisher
+        .send(vec![Bytes::from_static(b"topic-one")])
+        .await
+        .unwrap();
+    let first = timeout(Duration::from_secs(1), subscriber.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(first, vec![Bytes::from_static(b"topic-one")]);
+
+    subscriber
+        .cancel(Bytes::from_static(b"topic"))
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    publisher
+        .send(vec![Bytes::from_static(b"topic-two")])
+        .await
+        .unwrap();
+    assert!(
+        timeout(Duration::from_millis(200), subscriber.recv())
+            .await
+            .is_err()
+    );
 }
 
 #[cfg(unix)]

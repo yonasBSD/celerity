@@ -545,6 +545,32 @@ mod tests {
     }
 
     #[test]
+    fn subcore_can_disable_inbound_filtering() {
+        let mut core = SubCore::<u8>::new().with_filter_inbound(false);
+
+        let delivered = core
+            .on_peer_event(1, PeerEvent::Message(vec![Bytes::from_static(b"zzz")]))
+            .unwrap();
+        assert_eq!(
+            delivered,
+            vec![PatternAction::Deliver {
+                peer: 1,
+                message: vec![Bytes::from_static(b"zzz")],
+            }]
+        );
+    }
+
+    #[test]
+    fn subcore_rejects_unknown_cancels() {
+        let mut core = SubCore::<u8>::new();
+
+        assert_eq!(
+            core.cancel(Bytes::from_static(b"alpha")).unwrap_err(),
+            ProtocolError::UnknownSubscription
+        );
+    }
+
+    #[test]
     fn reqcore_inserts_delimiter_and_enforces_last_peer() {
         let mut core = ReqCore::<u8>::new();
         core.add_peer(1);
@@ -628,6 +654,38 @@ mod tests {
     }
 
     #[test]
+    fn reqcore_rejects_requests_without_any_peers() {
+        let mut core = ReqCore::<u8>::new();
+
+        assert_eq!(
+            core.send(vec![Bytes::from_static(b"one")]).unwrap_err(),
+            ProtocolError::NoAvailablePeers
+        );
+    }
+
+    #[test]
+    fn reqcore_rejects_replies_without_a_delimiter_or_body() {
+        let mut core = ReqCore::<u8>::new();
+        core.add_peer(1);
+        let _ = core.send(vec![Bytes::from_static(b"one")]).unwrap();
+
+        assert_eq!(
+            core.on_peer_event(1, PeerEvent::Message(vec![Bytes::from_static(b"bad")]))
+                .unwrap_err(),
+            ProtocolError::MissingEnvelopeDelimiter
+        );
+
+        let mut core = ReqCore::<u8>::new();
+        core.add_peer(1);
+        let _ = core.send(vec![Bytes::from_static(b"one")]).unwrap();
+        assert_eq!(
+            core.on_peer_event(1, PeerEvent::Message(vec![Bytes::new()]))
+                .unwrap_err(),
+            ProtocolError::MissingBodyFrames
+        );
+    }
+
+    #[test]
     fn repcore_restores_envelope_on_reply() {
         let mut core = RepCore::<u8>::new();
         core.add_peer(9);
@@ -707,6 +765,54 @@ mod tests {
                 peer: 2,
                 message: vec![Bytes::from_static(b"three")],
             }
+        );
+    }
+
+    #[test]
+    fn repcore_rejects_replies_without_an_active_request() {
+        let mut core = RepCore::<u8>::new();
+
+        assert_eq!(
+            core.reply(vec![Bytes::from_static(b"ok")]).unwrap_err(),
+            ProtocolError::RepStateViolation("cannot send a reply before receiving a request",)
+        );
+    }
+
+    #[test]
+    fn repcore_removing_the_active_peer_dispatches_the_next_waiter() {
+        let mut core = RepCore::<u8>::new();
+        core.add_peer(1);
+        core.add_peer(2);
+
+        let first = core
+            .on_peer_event(
+                1,
+                PeerEvent::Message(vec![Bytes::new(), Bytes::from_static(b"one")]),
+            )
+            .unwrap();
+        assert_eq!(
+            first,
+            vec![PatternAction::Deliver {
+                peer: 1,
+                message: vec![Bytes::from_static(b"one")],
+            }]
+        );
+
+        let second = core
+            .on_peer_event(
+                2,
+                PeerEvent::Message(vec![Bytes::new(), Bytes::from_static(b"two")]),
+            )
+            .unwrap();
+        assert!(second.is_empty());
+
+        let actions = core.remove_peer(1).unwrap();
+        assert_eq!(
+            actions,
+            vec![PatternAction::Deliver {
+                peer: 2,
+                message: vec![Bytes::from_static(b"two")],
+            }]
         );
     }
 }

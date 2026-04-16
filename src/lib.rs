@@ -598,3 +598,83 @@ fn validate_curve_keypair(keypair: &CurveKeyPair) -> Result<(), ProtocolError> {
         Err(ProtocolError::InvalidCurveKeyPair)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use bytes::Bytes;
+
+    use super::{
+        LinkScope, MetadataMap, PeerConfig, ProtocolError, SecurityConfig, SecurityMechanism,
+        SecurityPolicy, SecurityRole, SocketType,
+    };
+
+    #[test]
+    fn metadata_socket_type_reports_missing_and_invalid_values() {
+        let metadata = MetadataMap::new();
+        assert_eq!(
+            metadata.socket_type().unwrap_err(),
+            ProtocolError::MissingMetadata("Socket-Type")
+        );
+
+        let mut metadata = MetadataMap::new();
+        metadata.insert("Socket-Type", "PAIR").unwrap();
+        assert_eq!(
+            metadata.socket_type().unwrap_err(),
+            ProtocolError::InvalidSocketType(Bytes::from_static(b"PAIR"))
+        );
+    }
+
+    #[test]
+    fn handshake_metadata_uses_canonical_reserved_fields() {
+        let mut metadata = MetadataMap::new();
+        metadata.insert("Socket-Type", "SUB").unwrap();
+        metadata.insert("Identity", "shadow").unwrap();
+        metadata.insert("X-Test", "value").unwrap();
+
+        let handshake = PeerConfig::new(SocketType::Req, SecurityRole::Client, LinkScope::Local)
+            .with_identity("client-id")
+            .with_metadata(metadata)
+            .handshake_metadata()
+            .unwrap();
+
+        assert_eq!(
+            handshake.get("Socket-Type").cloned(),
+            Some(Bytes::from_static(b"REQ"))
+        );
+        assert_eq!(
+            handshake.get("Identity").cloned(),
+            Some(Bytes::from_static(b"client-id"))
+        );
+        assert_eq!(
+            handshake.get("X-Test").cloned(),
+            Some(Bytes::from_static(b"value"))
+        );
+        assert_eq!(handshake.len(), 3);
+    }
+
+    #[test]
+    fn validate_policy_requires_curve_config() {
+        let mut security = SecurityConfig::curve();
+        security.curve = None;
+        let config = PeerConfig::new(SocketType::Req, SecurityRole::Client, LinkScope::NonLocal)
+            .with_security(security);
+
+        assert_eq!(
+            config.validate_policy().unwrap_err(),
+            ProtocolError::MissingCurveConfig
+        );
+    }
+
+    #[test]
+    fn validate_policy_allows_non_local_null_when_requirement_is_disabled() {
+        let policy = SecurityPolicy {
+            allow_null_loopback: true,
+            allow_null_ipc: true,
+            require_curve_non_local: false,
+        };
+        let config = PeerConfig::new(SocketType::Req, SecurityRole::Client, LinkScope::NonLocal)
+            .with_security(SecurityConfig::new(SecurityMechanism::Null).with_policy(policy));
+
+        config.validate_policy().unwrap();
+    }
+}

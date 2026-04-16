@@ -162,3 +162,67 @@ pub(super) fn append_transcript(transcript: &mut Vec<u8>, label: &[u8], payload:
     transcript.extend_from_slice(&(payload.len() as u32).to_be_bytes());
     transcript.extend_from_slice(payload);
 }
+
+#[cfg(test)]
+mod tests {
+    use bytes::{BufMut, Bytes, BytesMut};
+
+    use super::{
+        append_transcript, decode_initiate_body, decode_welcome_body, parse_hello, parse_initiate,
+        parse_welcome,
+    };
+    use crate::ProtocolError;
+
+    #[test]
+    fn hello_and_welcome_reject_invalid_lengths() {
+        assert_eq!(
+            parse_hello(Bytes::from_static(&[0; 10])).unwrap_err(),
+            ProtocolError::CurveHandshake("invalid HELLO payload")
+        );
+        assert_eq!(
+            parse_welcome(Bytes::from_static(&[0; 40])).unwrap_err(),
+            ProtocolError::CurveHandshake("invalid WELCOME payload")
+        );
+    }
+
+    #[test]
+    fn welcome_body_rejects_unsupported_version() {
+        let mut body = BytesMut::with_capacity(73);
+        body.put_u8(9);
+        body.extend_from_slice(&[0; 72]);
+
+        assert_eq!(
+            decode_welcome_body(body.freeze()).unwrap_err(),
+            ProtocolError::CurveHandshake("unsupported WELCOME version")
+        );
+    }
+
+    #[test]
+    fn initiate_parsers_reject_truncated_payloads() {
+        assert_eq!(
+            parse_initiate(Bytes::from_static(&[0; 20])).unwrap_err(),
+            ProtocolError::CurveHandshake("invalid INITIATE payload")
+        );
+
+        let mut body = BytesMut::with_capacity(36);
+        body.extend_from_slice(&[0; 32]);
+        body.put_u32(4);
+        assert_eq!(
+            decode_initiate_body(body.freeze()).unwrap_err(),
+            ProtocolError::CurveHandshake("invalid INITIATE metadata")
+        );
+    }
+
+    #[test]
+    fn append_transcript_records_label_and_payload_lengths() {
+        let mut transcript = Vec::new();
+        append_transcript(&mut transcript, b"HELLO", b"abc");
+
+        assert_eq!(
+            transcript,
+            vec![
+                0, 5, b'H', b'E', b'L', b'L', b'O', 0, 0, 0, 3, b'a', b'b', b'c'
+            ]
+        );
+    }
+}

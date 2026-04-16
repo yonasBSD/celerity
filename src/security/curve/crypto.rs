@@ -362,3 +362,112 @@ fn decrypt_in_place(
         )
         .map_err(|_| ProtocolError::CurveAuthenticationFailed)
 }
+
+#[cfg(test)]
+mod tests {
+    use bytes::Bytes;
+
+    use super::{
+        KeySchedule, SecureChannel, derive_channel, open_message, public_from_secret, seal_message,
+    };
+    use crate::{
+        CurveConfig, CurveKeyPair, LinkScope, PeerConfig, ProtocolError, SecurityConfig,
+        SecurityRole, SocketType,
+    };
+
+    fn sample_channels(rekey_messages: u64, rekey_bytes: u64) -> (SecureChannel, SecureChannel) {
+        let client_eph_secret = [1; 32];
+        let client_static_secret = [2; 32];
+        let server_eph_secret = [3; 32];
+        let server_static_secret = [4; 32];
+
+        let client_eph_public = public_from_secret(client_eph_secret);
+        let client_static_public = public_from_secret(client_static_secret);
+        let server_eph_public = public_from_secret(server_eph_secret);
+        let server_static_public = public_from_secret(server_static_secret);
+
+        let client_config =
+            PeerConfig::new(SocketType::Req, SecurityRole::Client, LinkScope::NonLocal)
+                .with_security(SecurityConfig::curve().with_curve_config(CurveConfig {
+                    local_static_keypair: CurveKeyPair::from_secret(client_static_secret),
+                    rekey_messages,
+                    rekey_bytes,
+                    ..CurveConfig::default()
+                }));
+        let server_config =
+            PeerConfig::new(SocketType::Rep, SecurityRole::Server, LinkScope::NonLocal)
+                .with_security(SecurityConfig::curve().with_curve_config(CurveConfig {
+                    local_static_keypair: CurveKeyPair::from_secret(server_static_secret),
+                    rekey_messages,
+                    rekey_bytes,
+                    ..CurveConfig::default()
+                }));
+
+        let transcript = b"celerity-curve-test-transcript".to_vec();
+        let client_schedule = KeySchedule::client(
+            client_eph_secret,
+            client_static_secret,
+            server_eph_public,
+            server_static_public,
+        );
+        let server_schedule = KeySchedule::server(
+            server_eph_secret,
+            server_static_secret,
+            client_eph_public,
+            client_static_public,
+        );
+
+        (
+            derive_channel(
+                &client_config,
+                &transcript,
+                [5; 8],
+                [6; 8],
+                &client_schedule,
+            ),
+            derive_channel(
+                &server_config,
+                &transcript,
+                [5; 8],
+                [6; 8],
+                &server_schedule,
+            ),
+        )
+    }
+
+    #[test]
+    fn secure_channel_roundtrips_and_rejects_replays() {
+        let (mut client, mut server) = sample_channels(0, 0);
+
+        let payload = seal_message(&mut client, Bytes::from_static(b"hello")).unwrap();
+        assert_eq!(
+            open_message(&mut server, payload.clone()).unwrap(),
+            Bytes::from_static(b"hello")
+        );
+        assert_eq!(
+            open_message(&mut server, payload).unwrap_err(),
+            ProtocolError::CurveReplayDetected
+        );
+    }
+
+    #[test]
+    fn secure_channel_rekeys_after_message_limit() {
+        let (mut client, mut server) = sample_channels(1, 0);
+
+        let first = seal_message(&mut client, Bytes::from_static(b"one")).unwrap();
+        assert_eq!(
+            open_message(&mut server, first).unwrap(),
+            Bytes::from_static(b"one")
+        );
+        assert_eq!(client.send.epoch, 0);
+        assert_eq!(server.recv.epoch, 0);
+
+        let second = seal_message(&mut client, Bytes::from_static(b"two")).unwrap();
+        assert_eq!(
+            open_message(&mut server, second).unwrap(),
+            Bytes::from_static(b"two")
+        );
+        assert_eq!(client.send.epoch, 1);
+        assert_eq!(server.recv.epoch, 1);
+    }
+}

@@ -330,8 +330,9 @@ mod tests {
     use bytes::Bytes;
 
     use super::CelerityPeer;
+    use crate::wire::{Command, encode_command, encode_greeting, encode_message_frames};
     use crate::{
-        LinkScope, OutboundItem, PeerConfig, PeerEvent, ProtocolAction, ProtocolError,
+        CurveConfig, LinkScope, OutboundItem, PeerConfig, PeerEvent, ProtocolAction, ProtocolError,
         SecurityConfig, SecurityRole, SocketType,
     };
 
@@ -493,5 +494,139 @@ mod tests {
             PeerEvent::Message(message)
                 if message == &vec![Bytes::from_static(b""), Bytes::from_static(b"ping")]
         )));
+    }
+
+    #[test]
+    fn submit_before_handshake_is_rejected() {
+        let mut peer = CelerityPeer::new(local_config(SocketType::Req, SecurityRole::Client));
+
+        assert_eq!(
+            peer.submit(OutboundItem::Message(vec![Bytes::from_static(b"ping")]))
+                .unwrap_err(),
+            ProtocolError::PeerNotReady
+        );
+    }
+
+    #[test]
+    fn mechanism_mismatch_is_rejected() {
+        let mut left = CelerityPeer::new(local_config(SocketType::Req, SecurityRole::Client));
+        let mut right = CelerityPeer::new(
+            local_config(SocketType::Rep, SecurityRole::Server)
+                .with_security(SecurityConfig::curve()),
+        );
+
+        let err = pump(&mut left, &mut right).unwrap_err();
+        assert_eq!(
+            err,
+            ProtocolError::MechanismMismatch {
+                expected: crate::SecurityMechanism::Curve,
+                actual: crate::SecurityMechanism::Null,
+            }
+        );
+    }
+
+    #[test]
+    fn invalid_as_server_flag_closes_the_peer() {
+        let mut peer = CelerityPeer::new(local_config(SocketType::Req, SecurityRole::Client));
+        let mut greeting =
+            encode_greeting(&local_config(SocketType::Rep, SecurityRole::Server)).to_vec();
+        greeting[32] = 1;
+
+        let err = peer.handle_input_bytes(Bytes::from(greeting)).unwrap_err();
+        assert_eq!(err, ProtocolError::InvalidAsServer(1));
+        assert_eq!(
+            peer.handle_input(&[]).unwrap_err(),
+            ProtocolError::InvalidAsServer(1)
+        );
+    }
+
+    #[test]
+    fn plain_message_frames_are_rejected_during_handshake() {
+        let mut client = CelerityPeer::new(local_config(SocketType::Req, SecurityRole::Client));
+        let mut server = CelerityPeer::new(local_config(SocketType::Rep, SecurityRole::Server));
+        let _ = server.poll_output();
+
+        let greeting = match client.poll_output().unwrap() {
+            ProtocolAction::Write(bytes) => bytes,
+            ProtocolAction::Event(_) => unreachable!(),
+        };
+        server.handle_input_bytes(greeting).unwrap();
+
+        let frame = encode_message_frames(&[Bytes::from_static(b"oops")])
+            .unwrap()
+            .remove(0);
+        assert_eq!(
+            server.handle_input_bytes(frame).unwrap_err(),
+            ProtocolError::UnexpectedMessageDuringHandshake
+        );
+    }
+
+    #[test]
+    fn traffic_error_command_closes_the_peer() {
+        let mut client = CelerityPeer::new(local_config(SocketType::Req, SecurityRole::Client));
+        let mut server = CelerityPeer::new(local_config(SocketType::Rep, SecurityRole::Server));
+        let _ = pump(&mut client, &mut server).unwrap();
+
+        let err = client
+            .handle_input_bytes(
+                encode_command(Command::Error(Bytes::from_static(b"boom"))).unwrap(),
+            )
+            .unwrap_err();
+        assert_eq!(err, ProtocolError::RemoteError("boom".to_owned()));
+        assert_eq!(
+            client
+                .submit(OutboundItem::Message(vec![Bytes::from_static(b"again")]))
+                .unwrap_err(),
+            ProtocolError::RemoteError("boom".to_owned())
+        );
+    }
+
+    #[test]
+    fn command_frames_cannot_interrupt_a_multipart_message() {
+        let mut client = CelerityPeer::new(local_config(SocketType::Req, SecurityRole::Client));
+        let mut server = CelerityPeer::new(local_config(SocketType::Rep, SecurityRole::Server));
+        let _ = pump(&mut client, &mut server).unwrap();
+
+        let mut frames =
+            encode_message_frames(&[Bytes::from_static(b"one"), Bytes::from_static(b"two")])
+                .unwrap();
+        server.handle_input_bytes(frames.remove(0)).unwrap();
+
+        assert_eq!(
+            server
+                .handle_input_bytes(encode_command(Command::Subscribe(Bytes::new())).unwrap())
+                .unwrap_err(),
+            ProtocolError::InvalidCommandFrame
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "curve")]
+    fn curve_pinned_server_key_mismatch_is_rejected() {
+        let mut curve = CurveConfig::default().with_generated_keypair();
+        curve.server_public_key = Some([9; 32]);
+        let mut client = CelerityPeer::new(
+            PeerConfig::new(SocketType::Req, SecurityRole::Client, LinkScope::NonLocal)
+                .with_security(SecurityConfig::curve().with_curve_config(curve)),
+        );
+        let mut server = CelerityPeer::new(non_local_curve(SocketType::Rep, SecurityRole::Server));
+
+        let err = pump(&mut client, &mut server).unwrap_err();
+        assert_eq!(err, ProtocolError::CurveAuthenticationFailed);
+    }
+
+    #[test]
+    #[cfg(feature = "curve")]
+    fn curve_server_rejects_unlisted_client_keys() {
+        let mut curve = CurveConfig::default().with_generated_keypair();
+        curve.allowed_client_keys = vec![[1; 32]];
+        let mut client = CelerityPeer::new(non_local_curve(SocketType::Req, SecurityRole::Client));
+        let mut server = CelerityPeer::new(
+            PeerConfig::new(SocketType::Rep, SecurityRole::Server, LinkScope::NonLocal)
+                .with_security(SecurityConfig::curve().with_curve_config(curve)),
+        );
+
+        let err = pump(&mut client, &mut server).unwrap_err();
+        assert_eq!(err, ProtocolError::CurveAuthenticationFailed);
     }
 }

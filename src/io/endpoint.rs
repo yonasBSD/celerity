@@ -124,3 +124,40 @@ pub struct TransportMeta {
     pub link_scope: LinkScope,
     pub null_authorized: bool,
 }
+
+#[cfg(test)]
+mod tests {
+    use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+    #[cfg(unix)]
+    use std::path::PathBuf;
+
+    use super::{Endpoint, TransportKind};
+    use crate::io::TokioCelerityError;
+
+    #[test]
+    fn tcp_helpers_roundtrip() {
+        let endpoint = Endpoint::Tcp("127.0.0.1:5555".to_owned());
+        assert_eq!(endpoint.transport_kind(), TransportKind::Tcp);
+        assert_eq!(endpoint.tcp_target().unwrap(), "127.0.0.1:5555");
+
+        let derived =
+            Endpoint::from_local_addr(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 6000));
+        assert_eq!(derived.to_string(), "127.0.0.1:6000");
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn scheme_specific_helpers_reject_the_wrong_endpoint_kind() {
+        let tcp = Endpoint::Tcp("127.0.0.1:5555".to_owned());
+        let ipc = Endpoint::Ipc(PathBuf::from("/tmp/celerity.sock"));
+
+        assert!(matches!(
+            tcp.ipc_path().unwrap_err(),
+            TokioCelerityError::UnsupportedEndpoint(_)
+        ));
+        assert!(matches!(
+            ipc.tcp_target().unwrap_err(),
+            TokioCelerityError::UnsupportedEndpoint(_)
+        ));
+    }
+}

@@ -417,3 +417,145 @@ fn outbound_item_bytes(item: &OutboundItem) -> usize {
         OutboundItem::Subscribe(topic) | OutboundItem::Cancel(topic) => topic.len(),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::{
+        HwmConfig, HwmPolicy, LinkScope, LocalAuthPolicy, PeerConfig, SecurityConfig,
+        SecurityMechanism, SecurityPolicy, SecurityRole, SocketType,
+    };
+
+    use super::{
+        DriverStatus, READ_BUFFER_CAPACITY, TransportKind, TransportMeta, apply_transport_policy,
+        can_take_command, curve_handshake_deadline, queue_has_headroom, terminal_error,
+    };
+    use crate::io::TokioCelerityError;
+
+    #[test]
+    fn curve_handshake_deadline_depends_on_mechanism_and_timeout() {
+        let null_config = PeerConfig::new(SocketType::Req, SecurityRole::Client, LinkScope::Local);
+        assert!(curve_handshake_deadline(&null_config).is_none());
+
+        let mut curve = crate::CurveConfig::default();
+        curve.handshake_timeout_ms = 0;
+        let curve_config =
+            PeerConfig::new(SocketType::Req, SecurityRole::Client, LinkScope::NonLocal)
+                .with_security(SecurityConfig::curve().with_curve_config(curve));
+        assert!(curve_handshake_deadline(&curve_config).is_none());
+
+        let curve_config =
+            PeerConfig::new(SocketType::Req, SecurityRole::Client, LinkScope::NonLocal)
+                .with_security(SecurityConfig::curve());
+        assert!(curve_handshake_deadline(&curve_config).is_some());
+    }
+
+    #[test]
+    fn queue_helpers_respect_policy_and_capacity() {
+        let mut hwm = HwmConfig::default();
+        hwm.outbound_messages = 1;
+        hwm.outbound_bytes = 1;
+
+        assert!(queue_has_headroom(hwm, 0, 0));
+        assert!(!queue_has_headroom(hwm, 1, 0));
+        assert!(!queue_has_headroom(hwm, 0, READ_BUFFER_CAPACITY));
+        assert!(!can_take_command(hwm, 1, READ_BUFFER_CAPACITY));
+
+        hwm.policy = HwmPolicy::DropNewest;
+        assert!(can_take_command(hwm, 1, READ_BUFFER_CAPACITY));
+    }
+
+    #[test]
+    fn terminal_error_maps_driver_status() {
+        assert!(matches!(
+            terminal_error(None),
+            TokioCelerityError::ChannelClosed("connection task")
+        ));
+        assert!(matches!(
+            terminal_error(Some(&DriverStatus::CleanShutdown)),
+            TokioCelerityError::BackgroundTaskEnded
+        ));
+        assert_eq!(
+            terminal_error(Some(&DriverStatus::Failed("boom".to_owned()))).to_string(),
+            "background task failed: boom"
+        );
+    }
+
+    #[test]
+    fn apply_transport_policy_rejects_disallowed_loopback_null() {
+        let policy = SecurityPolicy {
+            allow_null_loopback: false,
+            allow_null_ipc: true,
+            require_curve_non_local: true,
+        };
+        let config = PeerConfig::new(SocketType::Req, SecurityRole::Client, LinkScope::Local)
+            .with_security(SecurityConfig::new(SecurityMechanism::Null).with_policy(policy));
+
+        let err = apply_transport_policy(
+            config,
+            TransportMeta {
+                kind: TransportKind::Tcp,
+                link_scope: LinkScope::Local,
+                null_authorized: true,
+            },
+        )
+        .unwrap_err();
+        assert!(matches!(err, TokioCelerityError::LocalAuth { .. }));
+    }
+
+    #[test]
+    fn apply_transport_policy_rejects_ipc_null_when_policy_disabled() {
+        let policy = SecurityPolicy {
+            allow_null_loopback: true,
+            allow_null_ipc: false,
+            require_curve_non_local: true,
+        };
+        let config = PeerConfig::new(SocketType::Req, SecurityRole::Client, LinkScope::Local)
+            .with_security(SecurityConfig::new(SecurityMechanism::Null).with_policy(policy));
+
+        let err = apply_transport_policy(
+            config,
+            TransportMeta {
+                kind: TransportKind::Ipc,
+                link_scope: LinkScope::Local,
+                null_authorized: true,
+            },
+        )
+        .unwrap_err();
+        assert!(matches!(err, TokioCelerityError::LocalAuth { .. }));
+    }
+
+    #[test]
+    fn apply_transport_policy_rejects_strict_ipc_without_authorization() {
+        let config = PeerConfig::new(SocketType::Req, SecurityRole::Client, LinkScope::Local)
+            .with_security(SecurityConfig::null());
+        let err = apply_transport_policy(
+            config,
+            TransportMeta {
+                kind: TransportKind::Ipc,
+                link_scope: LinkScope::Local,
+                null_authorized: false,
+            },
+        )
+        .unwrap_err();
+        assert!(matches!(err, TokioCelerityError::LocalAuth { .. }));
+    }
+
+    #[test]
+    fn apply_transport_policy_allows_relaxed_ipc_null() {
+        let config = PeerConfig::new(SocketType::Req, SecurityRole::Client, LinkScope::Local)
+            .with_security(
+                SecurityConfig::null().with_local_auth_policy(LocalAuthPolicy::FilesystemRelaxed),
+            );
+
+        let applied = apply_transport_policy(
+            config,
+            TransportMeta {
+                kind: TransportKind::Ipc,
+                link_scope: LinkScope::Local,
+                null_authorized: false,
+            },
+        )
+        .unwrap();
+        assert_eq!(applied.link_scope, LinkScope::Local);
+    }
+}
