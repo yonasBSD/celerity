@@ -65,22 +65,22 @@ pub(super) fn derive_channel(
     client_nonce_seed: [u8; 8],
     server_nonce_seed: [u8; 8],
     schedule: &KeySchedule,
-) -> SecureChannel {
+) -> Result<SecureChannel, ProtocolError> {
     let parts = schedule.parts();
-    let c2s_key = derive_key(transcript, &parts, b"curve-rs-c2s-key");
-    let s2c_key = derive_key(transcript, &parts, b"curve-rs-s2c-key");
+    let c2s_key = derive_key(transcript, &parts, b"curve-rs-c2s-key")?;
+    let s2c_key = derive_key(transcript, &parts, b"curve-rs-s2c-key")?;
     let c2s_prefix = derive_nonce_prefix(
         transcript,
         &parts,
         b"curve-rs-c2s-prefix",
         client_nonce_seed,
-    );
+    )?;
     let s2c_prefix = derive_nonce_prefix(
         transcript,
         &parts,
         b"curve-rs-s2c-prefix",
         server_nonce_seed,
-    );
+    )?;
     let (send_key, recv_key, send_prefix, recv_prefix) = match config.security_role {
         SecurityRole::Client => (c2s_key, s2c_key, c2s_prefix, s2c_prefix),
         SecurityRole::Server => (s2c_key, c2s_key, s2c_prefix, c2s_prefix),
@@ -89,9 +89,9 @@ pub(super) fn derive_channel(
         .security
         .curve
         .as_ref()
-        .expect("curve config validated");
+        .ok_or(ProtocolError::MissingCurveConfig)?;
 
-    SecureChannel {
+    Ok(SecureChannel {
         send: TrafficKey {
             key: send_key,
             nonce_prefix: send_prefix,
@@ -109,7 +109,7 @@ pub(super) fn derive_channel(
         transcript_hash: sha256(transcript),
         rekey_messages: curve.rekey_messages,
         rekey_bytes: curve.rekey_bytes,
-    }
+    })
 }
 
 pub(super) fn seal_message(
@@ -121,7 +121,7 @@ pub(super) fn seal_message(
         channel.rekey_messages,
         channel.rekey_bytes,
         channel.transcript_hash,
-    );
+    )?;
 
     let seq = channel.send.seq;
     let nonce = message_nonce(channel.send.nonce_prefix, seq);
@@ -156,7 +156,7 @@ pub(super) fn open_message(
         channel.rekey_messages,
         channel.rekey_bytes,
         channel.transcript_hash,
-    );
+    )?;
 
     let mut payload = payload;
     let seq = payload.get_u64();
@@ -192,7 +192,11 @@ pub(super) fn control_nonce(label: u8) -> [u8; 12] {
     nonce
 }
 
-pub(super) fn derive_key(transcript: &[u8], parts: &[&[u8]], label: &[u8]) -> [u8; 32] {
+pub(super) fn derive_key(
+    transcript: &[u8],
+    parts: &[&[u8]],
+    label: &[u8],
+) -> Result<[u8; 32], ProtocolError> {
     hkdf_expand_key(&sha256(transcript), parts, label)
 }
 
@@ -263,11 +267,12 @@ fn rotate_if_needed(
     rekey_messages: u64,
     rekey_bytes: u64,
     transcript_hash: [u8; 32],
-) {
-    let message_limit_hit = rekey_messages != 0 && key.seq != 0 && key.seq % rekey_messages == 0;
+) -> Result<(), ProtocolError> {
+    let message_limit_hit =
+        rekey_messages != 0 && key.seq != 0 && key.seq.is_multiple_of(rekey_messages);
     let byte_limit_hit = rekey_bytes != 0 && key.bytes >= rekey_bytes;
     if !message_limit_hit && !byte_limit_hit {
-        return;
+        return Ok(());
     }
 
     let mut info = BytesMut::with_capacity(16);
@@ -277,15 +282,16 @@ fn rotate_if_needed(
         &transcript_hash,
         &[&key.key, &key.nonce_prefix, &info],
         b"curve-rs-rekey-key",
-    );
+    )?;
     key.nonce_prefix = derive_nonce_prefix(
         &transcript_hash,
         &[&key.key, &key.nonce_prefix, &info],
         b"curve-rs-rekey-prefix",
         [0; 8],
-    );
+    )?;
     key.bytes = 0;
     key.epoch = key.epoch.saturating_add(1);
+    Ok(())
 }
 
 fn message_nonce(prefix: [u8; 4], seq: u64) -> [u8; 12] {
@@ -295,16 +301,23 @@ fn message_nonce(prefix: [u8; 4], seq: u64) -> [u8; 12] {
     nonce
 }
 
-fn derive_nonce_prefix(transcript: &[u8], parts: &[&[u8]], label: &[u8], seed: [u8; 8]) -> [u8; 4] {
+fn derive_nonce_prefix(
+    transcript: &[u8],
+    parts: &[&[u8]],
+    label: &[u8],
+    seed: [u8; 8],
+) -> Result<[u8; 4], ProtocolError> {
     let mut material = Vec::with_capacity(parts.len() + 1);
     material.extend_from_slice(parts);
     material.push(&seed);
-    hkdf_expand_vec(&sha256(transcript), &material, label, 4)
-        .try_into()
-        .expect("requested fixed prefix size")
+    hkdf_expand_array(&sha256(transcript), &material, label)
 }
 
-fn hkdf_expand_vec(salt: &[u8; 32], parts: &[&[u8]], label: &[u8], len: usize) -> Vec<u8> {
+fn hkdf_expand_array<const N: usize>(
+    salt: &[u8; 32],
+    parts: &[&[u8]],
+    label: &[u8],
+) -> Result<[u8; N], ProtocolError> {
     use hkdf::Hkdf;
     use sha2::Sha256;
 
@@ -314,16 +327,18 @@ fn hkdf_expand_vec(salt: &[u8; 32], parts: &[&[u8]], label: &[u8], len: usize) -
     }
 
     let hk = Hkdf::<Sha256>::new(Some(salt), &ikm);
-    let mut out = vec![0_u8; len];
+    let mut out = [0_u8; N];
     hk.expand(label, &mut out)
-        .expect("HKDF output length is bounded");
-    out
+        .map_err(|_| ProtocolError::CurveHandshake("invalid HKDF output length"))?;
+    Ok(out)
 }
 
-fn hkdf_expand_key(salt: &[u8; 32], parts: &[&[u8]], label: &[u8]) -> [u8; 32] {
-    hkdf_expand_vec(salt, parts, label, 32)
-        .try_into()
-        .expect("requested fixed key size")
+fn hkdf_expand_key(
+    salt: &[u8; 32],
+    parts: &[&[u8]],
+    label: &[u8],
+) -> Result<[u8; 32], ProtocolError> {
+    hkdf_expand_array(salt, parts, label)
 }
 
 fn encrypt_in_place(
@@ -375,7 +390,10 @@ mod tests {
         SecurityRole, SocketType,
     };
 
-    fn sample_channels(rekey_messages: u64, rekey_bytes: u64) -> (SecureChannel, SecureChannel) {
+    fn sample_channels(
+        rekey_messages: u64,
+        rekey_bytes: u64,
+    ) -> Result<(SecureChannel, SecureChannel), ProtocolError> {
         let client_eph_secret = [1; 32];
         let client_static_secret = [2; 32];
         let server_eph_secret = [3; 32];
@@ -417,27 +435,27 @@ mod tests {
             client_static_public,
         );
 
-        (
+        Ok((
             derive_channel(
                 &client_config,
                 &transcript,
                 [5; 8],
                 [6; 8],
                 &client_schedule,
-            ),
+            )?,
             derive_channel(
                 &server_config,
                 &transcript,
                 [5; 8],
                 [6; 8],
                 &server_schedule,
-            ),
-        )
+            )?,
+        ))
     }
 
     #[test]
     fn secure_channel_roundtrips_and_rejects_replays() {
-        let (mut client, mut server) = sample_channels(0, 0);
+        let (mut client, mut server) = sample_channels(0, 0).unwrap();
 
         let payload = seal_message(&mut client, Bytes::from_static(b"hello")).unwrap();
         assert_eq!(
@@ -452,7 +470,7 @@ mod tests {
 
     #[test]
     fn secure_channel_rekeys_after_message_limit() {
-        let (mut client, mut server) = sample_channels(1, 0);
+        let (mut client, mut server) = sample_channels(1, 0).unwrap();
 
         let first = seal_message(&mut client, Bytes::from_static(b"one")).unwrap();
         assert_eq!(

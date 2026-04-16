@@ -242,7 +242,7 @@ impl CurveMechanism {
             return Err(ProtocolError::CurveHandshake("cipher suite mismatch"));
         }
 
-        let local_static_public = local_static_public(config);
+        let local_static_public = local_static_public(config)?;
         if hello.server_key_hash != [0; 32] && hello.server_key_hash != sha256(local_static_public)
         {
             return Err(ProtocolError::CurveAuthenticationFailed);
@@ -255,7 +255,7 @@ impl CurveMechanism {
         let server_nonce_seed = random_bytes::<8>();
         let cookie = random_bytes::<32>();
         let shared = shared_secret(server_eph_secret, hello.client_eph_public);
-        let welcome_key = derive_key(&self.transcript, &[&shared], b"curve-rs-welcome");
+        let welcome_key = derive_key(&self.transcript, &[&shared], b"curve-rs-welcome")?;
 
         let mut body = BytesMut::with_capacity(73);
         body.put_u8(1);
@@ -312,7 +312,7 @@ impl CurveMechanism {
             "missing client ephemeral secret",
         ))?;
         let shared = shared_secret(client_eph_secret, welcome.server_eph_public);
-        let welcome_key = derive_key(&self.transcript, &[&shared], b"curve-rs-welcome");
+        let welcome_key = derive_key(&self.transcript, &[&shared], b"curve-rs-welcome")?;
         let body = decrypt_aead(
             &welcome_key,
             control_nonce(1),
@@ -329,8 +329,8 @@ impl CurveMechanism {
 
         append_transcript(&mut self.transcript, b"WELCOME", &payload);
 
-        let local_static_secret = local_static_secret(config);
-        let local_static_public = local_static_public(config);
+        let local_static_secret = local_static_secret(config)?;
+        let local_static_public = local_static_public(config)?;
         let keys = KeySchedule::client(
             client_eph_secret,
             local_static_secret,
@@ -338,7 +338,7 @@ impl CurveMechanism {
             welcome_body.server_static_public,
         );
         let parts = keys.parts();
-        let initiate_key = derive_key(&self.transcript, &parts, b"curve-rs-initiate");
+        let initiate_key = derive_key(&self.transcript, &parts, b"curve-rs-initiate")?;
 
         let metadata = encode_metadata(local_metadata)?;
         let mut body = BytesMut::with_capacity(36 + metadata.len());
@@ -389,7 +389,7 @@ impl CurveMechanism {
         let server_eph_secret = self.server_eph_secret.ok_or(ProtocolError::CurveHandshake(
             "missing server ephemeral secret",
         ))?;
-        let local_static_secret = local_static_secret(config);
+        let local_static_secret = local_static_secret(config)?;
         let keys = KeySchedule::server(
             server_eph_secret,
             local_static_secret,
@@ -397,7 +397,7 @@ impl CurveMechanism {
             initiate.client_static_public,
         );
         let parts = keys.parts();
-        let initiate_key = derive_key(&self.transcript, &parts, b"curve-rs-initiate");
+        let initiate_key = derive_key(&self.transcript, &parts, b"curve-rs-initiate")?;
 
         let body = decrypt_aead(
             &initiate_key,
@@ -426,7 +426,7 @@ impl CurveMechanism {
 
         append_transcript(&mut self.transcript, b"INITIATE", &payload);
         let peer_socket_type = validate_remote_metadata(config, &initiate_body.metadata)?;
-        let ready_key = derive_key(&self.transcript, &parts, b"curve-rs-ready");
+        let ready_key = derive_key(&self.transcript, &parts, b"curve-rs-ready")?;
         let ready_body = encode_metadata(local_metadata)?;
         let ready_payload = encrypt_aead(
             &ready_key,
@@ -449,7 +449,7 @@ impl CurveMechanism {
             self.server_nonce_seed
                 .ok_or(ProtocolError::CurveHandshake("missing server nonce seed"))?,
             &keys,
-        ));
+        )?);
 
         Ok(Some(HandshakeComplete {
             peer_socket_type,
@@ -477,7 +477,7 @@ impl CurveMechanism {
                 .ok_or(ProtocolError::CurveHandshake(
                     "missing server static public",
                 ))?;
-        let local_static_secret = local_static_secret(config);
+        let local_static_secret = local_static_secret(config)?;
         let keys = KeySchedule::client(
             client_eph_secret,
             local_static_secret,
@@ -485,7 +485,7 @@ impl CurveMechanism {
             server_static_public,
         );
         let parts = keys.parts();
-        let ready_key = derive_key(&self.transcript, &parts, b"curve-rs-ready");
+        let ready_key = derive_key(&self.transcript, &parts, b"curve-rs-ready")?;
         let body = decrypt_aead(
             &ready_key,
             control_nonce(3),
@@ -504,7 +504,7 @@ impl CurveMechanism {
             self.server_nonce_seed
                 .ok_or(ProtocolError::CurveHandshake("missing server nonce seed"))?,
             &keys,
-        ));
+        )?);
 
         Ok(Some(HandshakeComplete {
             peer_socket_type,
@@ -514,23 +514,11 @@ impl CurveMechanism {
 }
 
 #[cfg(feature = "curve")]
-fn local_static_secret(config: &PeerConfig) -> [u8; 32] {
-    config
-        .security
-        .curve
-        .as_ref()
-        .expect("curve config validated")
-        .local_static_keypair
-        .secret
+fn local_static_secret(config: &PeerConfig) -> Result<[u8; 32], ProtocolError> {
+    Ok(curve_config(config)?.local_static_keypair.secret)
 }
 
 #[cfg(feature = "curve")]
-fn local_static_public(config: &PeerConfig) -> [u8; 32] {
-    config
-        .security
-        .curve
-        .as_ref()
-        .expect("curve config validated")
-        .local_static_keypair
-        .public
+fn local_static_public(config: &PeerConfig) -> Result<[u8; 32], ProtocolError> {
+    Ok(curve_config(config)?.local_static_keypair.public)
 }

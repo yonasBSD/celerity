@@ -19,21 +19,9 @@ pub(super) fn parse_hello(mut payload: Bytes) -> Result<Hello, ProtocolError> {
 
     let version = payload.get_u8();
     let cipher_suite = CipherSuite::from_id(payload.get_u8())?;
-    let client_eph_public = payload
-        .split_to(32)
-        .as_ref()
-        .try_into()
-        .expect("length already checked");
-    let server_key_hash = payload
-        .split_to(32)
-        .as_ref()
-        .try_into()
-        .expect("length already checked");
-    let client_nonce_seed = payload
-        .split_to(8)
-        .as_ref()
-        .try_into()
-        .expect("length already checked");
+    let client_eph_public = take_array::<32>(&mut payload, "invalid HELLO payload")?;
+    let server_key_hash = take_array::<32>(&mut payload, "invalid HELLO payload")?;
+    let client_nonce_seed = take_array::<8>(&mut payload, "invalid HELLO payload")?;
 
     Ok(Hello {
         version,
@@ -57,11 +45,7 @@ pub(super) fn parse_welcome(mut payload: Bytes) -> Result<WelcomeFrame, Protocol
     }
 
     let cipher_suite = CipherSuite::from_id(payload.get_u8())?;
-    let server_eph_public = payload
-        .split_to(32)
-        .as_ref()
-        .try_into()
-        .expect("length already checked");
+    let server_eph_public = take_array::<32>(&mut payload, "invalid WELCOME payload")?;
     Ok(WelcomeFrame {
         cipher_suite,
         server_eph_public,
@@ -86,21 +70,9 @@ pub(super) fn decode_welcome_body(mut body: Bytes) -> Result<WelcomeBody, Protoc
         return Err(ProtocolError::CurveHandshake("unsupported WELCOME version"));
     }
 
-    let server_static_public = body
-        .split_to(32)
-        .as_ref()
-        .try_into()
-        .expect("length already checked");
-    let cookie = body
-        .split_to(32)
-        .as_ref()
-        .try_into()
-        .expect("length already checked");
-    let server_nonce_seed = body
-        .split_to(8)
-        .as_ref()
-        .try_into()
-        .expect("length already checked");
+    let server_static_public = take_array::<32>(&mut body, "invalid WELCOME body")?;
+    let cookie = take_array::<32>(&mut body, "invalid WELCOME body")?;
+    let server_nonce_seed = take_array::<8>(&mut body, "invalid WELCOME body")?;
 
     Ok(WelcomeBody {
         server_static_public,
@@ -120,11 +92,7 @@ pub(super) fn parse_initiate(mut payload: Bytes) -> Result<Initiate, ProtocolErr
         return Err(ProtocolError::CurveHandshake("invalid INITIATE payload"));
     }
 
-    let client_static_public = payload
-        .split_to(32)
-        .as_ref()
-        .try_into()
-        .expect("length already checked");
+    let client_static_public = take_array::<32>(&mut payload, "invalid INITIATE payload")?;
     Ok(Initiate {
         client_static_public,
         ciphertext: payload,
@@ -142,11 +110,7 @@ pub(super) fn decode_initiate_body(mut body: Bytes) -> Result<InitiateBody, Prot
         return Err(ProtocolError::CurveHandshake("invalid INITIATE body"));
     }
 
-    let cookie = body
-        .split_to(32)
-        .as_ref()
-        .try_into()
-        .expect("length already checked");
+    let cookie = take_array::<32>(&mut body, "invalid INITIATE body")?;
     let metadata_len = body.get_u32() as usize;
     if body.len() != metadata_len {
         return Err(ProtocolError::CurveHandshake("invalid INITIATE metadata"));
@@ -161,6 +125,20 @@ pub(super) fn append_transcript(transcript: &mut Vec<u8>, label: &[u8], payload:
     transcript.extend_from_slice(label);
     transcript.extend_from_slice(&(payload.len() as u32).to_be_bytes());
     transcript.extend_from_slice(payload);
+}
+
+fn take_array<const N: usize>(
+    payload: &mut Bytes,
+    error: &'static str,
+) -> Result<[u8; N], ProtocolError> {
+    if payload.len() < N {
+        return Err(ProtocolError::CurveHandshake(error));
+    }
+
+    let bytes = payload.split_to(N);
+    let mut out = [0_u8; N];
+    out.copy_from_slice(bytes.as_ref());
+    Ok(out)
 }
 
 #[cfg(test)]
