@@ -10,6 +10,18 @@ readme = "README.md"
 keywords = ["zmtp", "zeromq", "tokio", "ipc", "messaging"]
 categories = ["network-programming", "asynchronous", "command-line-utilities", "cryptography"]
 
+[lints.rust]
+missing_debug_implementations = "warn"
+unreachable_pub = "warn"
+unsafe_code = "warn"
+missing_docs = "warn"
+
+[lints.clippy]
+unwrap_used = "warn"
+expect_used = "warn"
+pedantic = "warn"
+# nursery = "warn"
+
 [features]
 default = []
 tokio = ["dep:tokio"]
