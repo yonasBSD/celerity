@@ -1,3 +1,5 @@
+//! Low-level Tokio transport adapters shared by the socket wrappers.
+
 use std::io::{self, IoSlice};
 use std::net::SocketAddr;
 #[cfg(unix)]
@@ -15,10 +17,13 @@ use crate::{LinkScope, LocalAuthPolicy};
 
 use super::{BindOptions, Endpoint, TokioCelerityError, TransportKind, TransportMeta};
 
+/// A transport stream accepted or connected by the Tokio adapters.
 #[derive(Debug)]
 pub enum AnyStream {
+    /// A TCP stream.
     Tcp(TcpStream),
     #[cfg(unix)]
+    /// A Unix domain socket stream.
     Ipc(UnixStream),
 }
 

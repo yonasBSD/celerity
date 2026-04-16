@@ -1,3 +1,5 @@
+//! Messaging-pattern state machines built on top of peer events.
+
 use std::collections::{HashMap, VecDeque};
 use std::hash::Hash;
 
@@ -5,12 +7,26 @@ use bytes::Bytes;
 
 use crate::{Multipart, OutboundItem, PeerEvent, ProtocolError};
 
+/// An action produced by a pattern core.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PatternAction<PeerId> {
-    Send { peer: PeerId, item: OutboundItem },
-    Deliver { peer: PeerId, message: Multipart },
+    /// Send an outbound item to a specific peer.
+    Send {
+        /// The target peer identifier.
+        peer: PeerId,
+        /// The outbound item to send.
+        item: OutboundItem,
+    },
+    /// Deliver an inbound multipart message to the caller.
+    Deliver {
+        /// The peer that produced the message.
+        peer: PeerId,
+        /// The message body to surface to the caller.
+        message: Multipart,
+    },
 }
 
+/// Core state for PUB socket behavior.
 #[derive(Debug, Clone)]
 pub struct PubCore<PeerId> {
     subscriptions: HashMap<PeerId, HashMap<Bytes, usize>>,
@@ -29,10 +45,12 @@ where
     PeerId: Copy + Eq + Hash,
 {
     #[must_use]
+    /// Creates an empty PUB core.
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// Removes all subscription state associated with a peer.
     pub fn remove_peer(&mut self, peer: PeerId) {
         self.subscriptions.remove(&peer);
     }
@@ -94,6 +112,7 @@ where
     }
 }
 
+/// Core state for SUB socket behavior.
 #[derive(Debug, Clone)]
 pub struct SubCore<PeerId> {
     peers: Vec<PeerId>,
@@ -116,16 +135,19 @@ where
     PeerId: Copy + Eq,
 {
     #[must_use]
+    /// Creates an empty SUB core.
     pub fn new() -> Self {
         Self::default()
     }
 
     #[must_use]
+    /// Controls whether inbound messages are filtered against local subscriptions.
     pub fn with_filter_inbound(mut self, filter_inbound: bool) -> Self {
         self.filter_inbound = filter_inbound;
         self
     }
 
+    /// Adds a peer and replays local subscriptions to it.
     pub fn add_peer(&mut self, peer: PeerId) -> Vec<PatternAction<PeerId>> {
         if self.peers.contains(&peer) {
             return Vec::new();
@@ -143,6 +165,7 @@ where
             .collect()
     }
 
+    /// Removes a peer from the active SUB peer set.
     pub fn remove_peer(&mut self, peer: PeerId) {
         self.peers.retain(|candidate| *candidate != peer);
     }
@@ -222,6 +245,7 @@ where
     }
 }
 
+/// Core state for REQ socket behavior.
 #[derive(Debug, Clone)]
 pub struct ReqCore<PeerId> {
     peers: VecDeque<PeerId>,
@@ -242,16 +266,19 @@ where
     PeerId: Copy + Eq,
 {
     #[must_use]
+    /// Creates an empty REQ core.
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// Adds a peer to the round-robin request queue.
     pub fn add_peer(&mut self, peer: PeerId) {
         if !self.peers.contains(&peer) {
             self.peers.push_back(peer);
         }
     }
 
+    /// Removes a peer from the request queue and clears any pending wait on it.
     pub fn remove_peer(&mut self, peer: PeerId) {
         self.peers.retain(|candidate| *candidate != peer);
         if self.waiting_on == Some(peer) {
@@ -341,6 +368,7 @@ struct ActiveReply<PeerId> {
     envelope: Multipart,
 }
 
+/// Core state for REP socket behavior.
 #[derive(Debug, Clone)]
 pub struct RepCore<PeerId> {
     queues: HashMap<PeerId, VecDeque<QueuedRequest>>,
@@ -363,10 +391,12 @@ where
     PeerId: Copy + Eq + Hash,
 {
     #[must_use]
+    /// Creates an empty REP core.
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// Adds a peer with an empty inbound request queue.
     pub fn add_peer(&mut self, peer: PeerId) {
         self.queues.entry(peer).or_default();
     }

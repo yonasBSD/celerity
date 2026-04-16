@@ -1,3 +1,5 @@
+//! Higher-level Tokio socket wrappers built on top of [`TokioCelerity`].
+
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::net::SocketAddr;
 
@@ -19,6 +21,7 @@ use super::{
     capacity_from_hwm,
 };
 
+/// A convenience wrapper for PUB semantics over Tokio transports.
 pub struct PubSocket {
     command_tx: mpsc::Sender<PubCommand>,
     ready_rx: watch::Receiver<usize>,
@@ -28,10 +31,20 @@ pub struct PubSocket {
 }
 
 impl PubSocket {
+    /// Binds a publisher to an endpoint using default bind options.
+    ///
+    /// # Errors
+    ///
+    /// Returns endpoint parsing, binding, or local-authorization errors.
     pub async fn bind(endpoint: &str) -> Result<Self, TokioCelerityError> {
         Self::bind_with_options(endpoint, BindOptions::default()).await
     }
 
+    /// Binds a publisher to an endpoint with explicit bind options.
+    ///
+    /// # Errors
+    ///
+    /// Returns endpoint parsing, binding, or local-authorization errors.
     pub async fn bind_with_options(
         endpoint: &str,
         bind_options: BindOptions,
@@ -61,14 +74,25 @@ impl PubSocket {
         })
     }
 
+    /// Returns the bound endpoint.
     pub fn endpoint(&self) -> &Endpoint {
         &self.endpoint
     }
 
+    /// Returns the bound TCP socket address.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the publisher is not bound on TCP.
     pub fn local_addr(&self) -> SocketAddr {
         self.local_addr.expect("publisher is not bound on TCP")
     }
 
+    /// Waits for at least one subscriber to become ready.
+    ///
+    /// # Errors
+    ///
+    /// Returns a runtime error if the readiness watcher task fails.
     pub async fn wait_for_subscriber(
         &mut self,
         timeout: std::time::Duration,
@@ -94,6 +118,12 @@ impl PubSocket {
         }
     }
 
+    /// Publishes a multipart message to connected subscribers.
+    ///
+    /// # Errors
+    ///
+    /// Returns a runtime error if the background task has ended or rejects the
+    /// message.
     pub async fn send(&self, message: Multipart) -> Result<(), TokioCelerityError> {
         let (reply_tx, reply_rx) = oneshot::channel();
         self.command_tx
@@ -105,11 +135,17 @@ impl PubSocket {
             .map_err(|_| TokioCelerityError::ChannelClosed("pub command response channel"))?
     }
 
+    /// Waits for the publisher task to finish.
+    ///
+    /// # Errors
+    ///
+    /// Returns the terminal runtime error if the task failed.
     pub async fn join(self) -> Result<(), TokioCelerityError> {
         self.task.await?
     }
 }
 
+/// A convenience wrapper for SUB semantics over Tokio transports.
 pub struct SubSocket {
     command_tx: mpsc::Sender<SubCommand>,
     message_rx: mpsc::Receiver<Result<Multipart, TokioCelerityError>>,
@@ -117,10 +153,20 @@ pub struct SubSocket {
 }
 
 impl SubSocket {
+    /// Connects a subscriber to an endpoint.
+    ///
+    /// # Errors
+    ///
+    /// Returns endpoint parsing, connect, or local-authorization errors.
     pub async fn connect(endpoint: &str) -> Result<Self, TokioCelerityError> {
         Self::connect_with_options(endpoint, ConnectOptions).await
     }
 
+    /// Connects a subscriber with explicit connect options.
+    ///
+    /// # Errors
+    ///
+    /// Returns endpoint parsing, connect, or local-authorization errors.
     pub async fn connect_with_options(
         endpoint: &str,
         _options: ConnectOptions,
@@ -144,6 +190,12 @@ impl SubSocket {
         })
     }
 
+    /// Registers a subscription prefix.
+    ///
+    /// # Errors
+    ///
+    /// Returns a runtime or protocol error if the background task rejects the
+    /// subscription.
     pub async fn subscribe(&self, topic: Bytes) -> Result<(), TokioCelerityError> {
         let (reply_tx, reply_rx) = oneshot::channel();
         self.command_tx
@@ -155,6 +207,12 @@ impl SubSocket {
             .map_err(|_| TokioCelerityError::ChannelClosed("sub command response channel"))?
     }
 
+    /// Cancels a previously registered subscription prefix.
+    ///
+    /// # Errors
+    ///
+    /// Returns a runtime or protocol error if the background task rejects the
+    /// cancellation.
     pub async fn cancel(&self, topic: Bytes) -> Result<(), TokioCelerityError> {
         let (reply_tx, reply_rx) = oneshot::channel();
         self.command_tx
@@ -166,6 +224,11 @@ impl SubSocket {
             .map_err(|_| TokioCelerityError::ChannelClosed("sub command response channel"))?
     }
 
+    /// Receives the next delivered multipart message.
+    ///
+    /// # Errors
+    ///
+    /// Returns the terminal runtime error if the background task has ended.
     pub async fn recv(&mut self) -> Result<Multipart, TokioCelerityError> {
         match self.message_rx.recv().await {
             Some(result) => result,
@@ -173,6 +236,11 @@ impl SubSocket {
         }
     }
 
+    /// Waits for the subscriber task to finish.
+    ///
+    /// # Errors
+    ///
+    /// Returns the terminal runtime error if the task failed.
     pub async fn join(self) -> Result<(), TokioCelerityError> {
         self.task.await?
     }
@@ -186,12 +254,18 @@ impl SubSocket {
     }
 }
 
+/// A convenience wrapper for REQ semantics over Tokio transports.
 pub struct ReqSocket {
     command_tx: mpsc::Sender<ReqCommand>,
     task: JoinHandle<Result<(), TokioCelerityError>>,
 }
 
 impl ReqSocket {
+    /// Connects a requester to an endpoint.
+    ///
+    /// # Errors
+    ///
+    /// Returns endpoint parsing, connect, or local-authorization errors.
     pub async fn connect(endpoint: &str) -> Result<Self, TokioCelerityError> {
         let endpoint = Endpoint::parse(endpoint)?;
         let (stream, transport) =
@@ -205,6 +279,11 @@ impl ReqSocket {
         Ok(Self { command_tx, task })
     }
 
+    /// Sends a request and waits for the corresponding reply.
+    ///
+    /// # Errors
+    ///
+    /// Returns a runtime or protocol error if the request cannot be processed.
     pub async fn request(&self, message: Multipart) -> Result<Multipart, TokioCelerityError> {
         let (reply_tx, reply_rx) = oneshot::channel();
         self.command_tx
@@ -216,11 +295,17 @@ impl ReqSocket {
             .map_err(|_| TokioCelerityError::ChannelClosed("req response channel"))?
     }
 
+    /// Waits for the requester task to finish.
+    ///
+    /// # Errors
+    ///
+    /// Returns the terminal runtime error if the task failed.
     pub async fn join(self) -> Result<(), TokioCelerityError> {
         self.task.await?
     }
 }
 
+/// A convenience wrapper for REP semantics over Tokio transports.
 pub struct RepSocket {
     command_tx: mpsc::Sender<RepCommand>,
     request_rx: mpsc::Receiver<Result<Multipart, TokioCelerityError>>,
@@ -230,10 +315,20 @@ pub struct RepSocket {
 }
 
 impl RepSocket {
+    /// Binds a responder to an endpoint using default bind options.
+    ///
+    /// # Errors
+    ///
+    /// Returns endpoint parsing, binding, or local-authorization errors.
     pub async fn bind(endpoint: &str) -> Result<Self, TokioCelerityError> {
         Self::bind_with_options(endpoint, BindOptions::default()).await
     }
 
+    /// Binds a responder to an endpoint with explicit bind options.
+    ///
+    /// # Errors
+    ///
+    /// Returns endpoint parsing, binding, or local-authorization errors.
     pub async fn bind_with_options(
         endpoint: &str,
         bind_options: BindOptions,
@@ -263,14 +358,25 @@ impl RepSocket {
         })
     }
 
+    /// Returns the bound endpoint.
     pub fn endpoint(&self) -> &Endpoint {
         &self.endpoint
     }
 
+    /// Returns the bound TCP socket address.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the responder is not bound on TCP.
     pub fn local_addr(&self) -> SocketAddr {
         self.local_addr.expect("responder is not bound on TCP")
     }
 
+    /// Receives the next inbound request body.
+    ///
+    /// # Errors
+    ///
+    /// Returns the terminal runtime error if the background task has ended.
     pub async fn recv(&mut self) -> Result<Multipart, TokioCelerityError> {
         match self.request_rx.recv().await {
             Some(result) => result,
@@ -278,6 +384,11 @@ impl RepSocket {
         }
     }
 
+    /// Sends a reply for the currently active request.
+    ///
+    /// # Errors
+    ///
+    /// Returns a runtime or protocol error if the reply cannot be processed.
     pub async fn reply(&self, message: Multipart) -> Result<(), TokioCelerityError> {
         let (reply_tx, reply_rx) = oneshot::channel();
         self.command_tx
@@ -289,6 +400,11 @@ impl RepSocket {
             .map_err(|_| TokioCelerityError::ChannelClosed("rep command response channel"))?
     }
 
+    /// Waits for the responder task to finish.
+    ///
+    /// # Errors
+    ///
+    /// Returns the terminal runtime error if the task failed.
     pub async fn join(self) -> Result<(), TokioCelerityError> {
         self.task.await?
     }

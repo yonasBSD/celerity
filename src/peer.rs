@@ -1,3 +1,5 @@
+//! Sans-IO peer state machine for handshake and traffic processing.
+
 use std::collections::VecDeque;
 
 use bytes::Bytes;
@@ -20,6 +22,7 @@ enum PeerState {
     Closed,
 }
 
+/// A single peer state machine that speaks ZMTP 3.1.
 #[derive(Debug)]
 pub struct CelerityPeer {
     config: PeerConfig,
@@ -33,6 +36,7 @@ pub struct CelerityPeer {
 }
 
 impl CelerityPeer {
+    /// Creates a peer and emits its opening greeting if configuration allows it.
     pub fn new(config: PeerConfig) -> Self {
         let mechanism = Mechanism::new(&config);
         let mut output = VecDeque::new();
@@ -140,6 +144,7 @@ impl CelerityPeer {
         Ok(())
     }
 
+    /// Retrieves the next pending protocol action, if any.
     pub fn poll_output(&mut self) -> Option<ProtocolAction> {
         self.output.pop_front()
     }

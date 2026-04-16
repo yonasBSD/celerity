@@ -1,3 +1,5 @@
+//! Minimal CLI for publishing and subscribing with Celerity.
+
 use std::process::ExitCode;
 use std::time::Duration;
 

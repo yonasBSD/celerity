@@ -1,3 +1,5 @@
+//! Tokio transport integration tests.
+
 #![cfg(feature = "tokio")]
 
 use std::time::{Duration, SystemTime, UNIX_EPOCH};

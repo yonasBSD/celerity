@@ -1,3 +1,8 @@
+//! Sans-IO ZMTP 3.1 primitives with optional Tokio transport adapters.
+//!
+//! The crate exposes the core peer state machine, messaging-pattern helpers,
+//! protocol configuration, and optional Tokio-based socket wrappers.
+
 #[cfg(feature = "tokio")]
 pub mod io;
 pub mod pattern;
@@ -11,13 +16,19 @@ use thiserror::Error;
 pub use pattern::{PatternAction, PubCore, RepCore, ReqCore, SubCore};
 pub use peer::CelerityPeer;
 
+/// An ordered collection of message frames.
 pub type Multipart = Vec<Bytes>;
 
+/// The messaging pattern a peer exposes on the wire.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SocketType {
+    /// A publisher that fans messages out to matching subscribers.
     Pub,
+    /// A subscriber that receives messages from publishers.
     Sub,
+    /// A requester that sends one request at a time and waits for a reply.
     Req,
+    /// A responder that receives requests and sends replies.
     Rep,
 }
 
@@ -54,21 +65,30 @@ impl SocketType {
     }
 }
 
+/// The local role played during the security handshake.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SecurityRole {
+    /// The initiating side of the handshake.
     Client,
+    /// The accepting side of the handshake.
     Server,
 }
 
+/// Whether a transport is confined to the local machine.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum LinkScope {
+    /// Loopback TCP or IPC on the same machine.
     Local,
+    /// A transport that may traverse a non-local network.
     NonLocal,
 }
 
+/// The wire-level security mechanism used by a peer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SecurityMechanism {
+    /// The plaintext NULL mechanism.
     Null,
+    /// The authenticated and encrypted CURVE mechanism.
     Curve,
 }
 
@@ -81,14 +101,19 @@ impl SecurityMechanism {
     }
 }
 
+/// Filesystem authorization policy for local IPC endpoints.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum LocalAuthPolicy {
+    /// Require strict ownership and permission checks on IPC paths.
     FilesystemStrict,
+    /// Allow less restrictive local filesystem permissions for IPC paths.
     FilesystemRelaxed,
 }
 
+/// The cryptographic suite used for CURVE traffic.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum CipherSuite {
+    /// X25519 key agreement, HKDF-SHA256 derivation, and ChaCha20-Poly1305 AEAD.
     X25519HkdfSha256ChaCha20Poly1305,
 }
 
@@ -109,10 +134,14 @@ impl CipherSuite {
     }
 }
 
+/// Policy toggles applied before a peer is allowed to handshake.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SecurityPolicy {
+    /// Whether NULL security is allowed for loopback TCP links.
     pub allow_null_loopback: bool,
+    /// Whether NULL security is allowed for local IPC links.
     pub allow_null_ipc: bool,
+    /// Whether non-local links must use CURVE unless explicitly overridden.
     pub require_curve_non_local: bool,
 }
 
@@ -126,18 +155,23 @@ impl Default for SecurityPolicy {
     }
 }
 
+/// A CURVE static keypair.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CurveKeyPair {
+    /// The local X25519 secret key bytes.
     pub secret: [u8; 32],
+    /// The corresponding X25519 public key bytes.
     pub public: [u8; 32],
 }
 
 impl CurveKeyPair {
+    /// Builds a keypair from explicit secret and public key bytes.
     pub const fn from_parts(secret: [u8; 32], public: [u8; 32]) -> Self {
         Self { secret, public }
     }
 
     #[cfg(feature = "curve")]
+    /// Derives the public key for an X25519 secret key.
     pub fn from_secret(secret: [u8; 32]) -> Self {
         use x25519_dalek::{PublicKey, StaticSecret};
 
@@ -150,6 +184,7 @@ impl CurveKeyPair {
     }
 
     #[cfg(feature = "curve")]
+    /// Generates a random X25519 keypair.
     pub fn generate() -> Self {
         use rand_core::OsRng;
         use x25519_dalek::{PublicKey, StaticSecret};
@@ -163,14 +198,22 @@ impl CurveKeyPair {
     }
 }
 
+/// Configuration for the CURVE security mechanism.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CurveConfig {
+    /// The expected server public key pinned by a client, when configured.
     pub server_public_key: Option<[u8; 32]>,
+    /// The local static keypair presented during CURVE authentication.
     pub local_static_keypair: CurveKeyPair,
+    /// The client keys a CURVE server will accept, if access is restricted.
     pub allowed_client_keys: Vec<[u8; 32]>,
+    /// The maximum handshake duration in milliseconds.
     pub handshake_timeout_ms: u64,
+    /// Rekey after this many encrypted messages.
     pub rekey_messages: u64,
+    /// Rekey after this many encrypted payload bytes.
     pub rekey_bytes: u64,
+    /// The cipher suite used for handshake and traffic protection.
     pub cipher_suite: CipherSuite,
 }
 
@@ -195,6 +238,7 @@ impl Default for CurveConfig {
 
 impl CurveConfig {
     #[cfg(feature = "curve")]
+    /// Replaces the local static keypair with a freshly generated one.
     pub fn with_generated_keypair(self) -> Self {
         let mut next = self;
         next.local_static_keypair = CurveKeyPair::generate();
@@ -202,23 +246,33 @@ impl CurveConfig {
     }
 
     #[cfg(not(feature = "curve"))]
+    /// Returns the configuration unchanged when the `curve` feature is disabled.
     pub fn with_generated_keypair(self) -> Self {
         self
     }
 }
 
+/// Queue behavior once a high-water mark is reached.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum HwmPolicy {
+    /// Backpressure senders until space becomes available.
     Block,
+    /// Accept the call but drop the newest queued item.
     DropNewest,
 }
 
+/// High-water mark limits for inbound and outbound buffering.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct HwmConfig {
+    /// Maximum number of inbound messages buffered by the runtime.
     pub inbound_messages: usize,
+    /// Maximum number of outbound messages buffered by the runtime.
     pub outbound_messages: usize,
+    /// Maximum number of inbound bytes buffered by the runtime.
     pub inbound_bytes: usize,
+    /// Maximum number of outbound bytes buffered by the runtime.
     pub outbound_bytes: usize,
+    /// Action taken when a limit is reached.
     pub policy: HwmPolicy,
 }
 
@@ -234,16 +288,23 @@ impl Default for HwmConfig {
     }
 }
 
+/// Security configuration for a peer.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SecurityConfig {
+    /// The active wire-level security mechanism.
     pub mechanism: SecurityMechanism,
+    /// Whether remote NULL links are allowed despite policy defaults.
     pub allow_insecure_null: bool,
+    /// Policy checks applied before the handshake starts.
     pub policy: SecurityPolicy,
+    /// Local filesystem authorization policy for IPC transports.
     pub local_auth: LocalAuthPolicy,
+    /// CURVE-specific parameters, when the mechanism is CURVE.
     pub curve: Option<CurveConfig>,
 }
 
 impl SecurityConfig {
+    /// Creates a security configuration for a mechanism with sensible defaults.
     pub fn new(mechanism: SecurityMechanism) -> Self {
         Self {
             mechanism,
@@ -257,14 +318,17 @@ impl SecurityConfig {
         }
     }
 
+    /// Creates a configuration for the NULL mechanism.
     pub fn null() -> Self {
         Self::new(SecurityMechanism::Null)
     }
 
+    /// Creates a configuration for the CURVE mechanism.
     pub fn curve() -> Self {
         Self::new(SecurityMechanism::Curve)
     }
 
+    /// Chooses a default mechanism for the transport scope.
     pub fn default_for(link_scope: LinkScope) -> Self {
         match link_scope {
             // Local links default to NULL for easier same-host bootstrapping.
@@ -273,37 +337,49 @@ impl SecurityConfig {
         }
     }
 
+    /// Enables or disables explicit opt-in for non-local NULL links.
     pub fn with_insecure_null(mut self, allow_insecure_null: bool) -> Self {
         self.allow_insecure_null = allow_insecure_null;
         self
     }
 
+    /// Replaces the attached security policy.
     pub fn with_policy(mut self, policy: SecurityPolicy) -> Self {
         self.policy = policy;
         self
     }
 
+    /// Replaces the local IPC authorization policy.
     pub fn with_local_auth_policy(mut self, local_auth: LocalAuthPolicy) -> Self {
         self.local_auth = local_auth;
         self
     }
 
+    /// Replaces the CURVE configuration block.
     pub fn with_curve_config(mut self, curve: CurveConfig) -> Self {
         self.curve = Some(curve);
         self
     }
 }
 
+/// Case-preserving metadata exchanged during the ZMTP handshake.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct MetadataMap {
     entries: Vec<(Bytes, Bytes)>,
 }
 
 impl MetadataMap {
+    /// Creates an empty metadata map.
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// Inserts or replaces a metadata entry by name.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProtocolError::InvalidMetadataName`] when `name` is empty,
+    /// longer than 255 bytes, or contains unsupported characters.
     pub fn insert(
         &mut self,
         name: impl Into<Bytes>,
@@ -312,10 +388,12 @@ impl MetadataMap {
         self.insert_bytes(name.into(), value.into())
     }
 
+    /// Looks up a metadata value using an ASCII case-insensitive string key.
     pub fn get(&self, name: &str) -> Option<&Bytes> {
         self.get_bytes(name.as_bytes())
     }
 
+    /// Looks up a metadata value using an ASCII case-insensitive byte key.
     pub fn get_bytes(&self, name: &[u8]) -> Option<&Bytes> {
         self.entries
             .iter()
@@ -324,14 +402,17 @@ impl MetadataMap {
             .map(|(_, value)| value)
     }
 
+    /// Iterates over metadata entries in insertion order.
     pub fn iter(&self) -> impl Iterator<Item = (&Bytes, &Bytes)> {
         self.entries.iter().map(|(name, value)| (name, value))
     }
 
+    /// Returns the number of stored entries.
     pub fn len(&self) -> usize {
         self.entries.len()
     }
 
+    /// Returns `true` when no metadata entries are stored.
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
@@ -380,18 +461,27 @@ fn validate_metadata_name(name: &[u8]) -> Result<(), ProtocolError> {
     }
 }
 
+/// Configuration used to build a [`CelerityPeer`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PeerConfig {
+    /// The socket pattern exposed by the local peer.
     pub socket_type: SocketType,
+    /// The local security-handshake role.
     pub security_role: SecurityRole,
+    /// Whether the transport is local-only or potentially remote.
     pub link_scope: LinkScope,
+    /// The configured wire-level security settings.
     pub security: SecurityConfig,
+    /// Optional peer identity advertised during the handshake.
     pub identity: Option<Bytes>,
+    /// Additional handshake metadata.
     pub metadata: MetadataMap,
+    /// High-water mark limits used by the runtime adapters.
     pub hwm: HwmConfig,
 }
 
 impl PeerConfig {
+    /// Creates a peer configuration with defaults derived from the link scope.
     pub fn new(
         socket_type: SocketType,
         security_role: SecurityRole,
@@ -408,21 +498,25 @@ impl PeerConfig {
         }
     }
 
+    /// Replaces the security configuration.
     pub fn with_security(mut self, security: SecurityConfig) -> Self {
         self.security = security;
         self
     }
 
+    /// Sets the handshake identity advertised by the peer.
     pub fn with_identity(mut self, identity: impl Into<Bytes>) -> Self {
         self.identity = Some(identity.into());
         self
     }
 
+    /// Replaces the additional handshake metadata.
     pub fn with_metadata(mut self, metadata: MetadataMap) -> Self {
         self.metadata = metadata;
         self
     }
 
+    /// Replaces the high-water mark configuration.
     pub fn with_hwm(mut self, hwm: HwmConfig) -> Self {
         self.hwm = hwm;
         self
@@ -476,112 +570,174 @@ impl PeerConfig {
     }
 }
 
+/// An item submitted for outbound delivery.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OutboundItem {
+    /// A multipart message to encode and send.
     Message(Multipart),
+    /// A subscription command for a PUB/SUB pattern.
     Subscribe(Bytes),
+    /// A subscription cancellation command for a PUB/SUB pattern.
     Cancel(Bytes),
 }
 
+/// An event emitted by the peer state machine.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PeerEvent {
+    /// The handshake completed and remote metadata is available.
     HandshakeComplete {
+        /// The socket type reported by the remote peer.
         peer_socket_type: SocketType,
+        /// The metadata reported by the remote peer.
         metadata: MetadataMap,
     },
+    /// A complete inbound multipart message.
     Message(Multipart),
+    /// A subscription update received from the remote peer.
     Subscription {
+        /// `true` to subscribe and `false` to cancel.
         subscribe: bool,
+        /// The topic prefix carried by the subscription command.
         topic: Bytes,
     },
 }
 
+/// A low-level action produced by the peer state machine.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProtocolAction {
+    /// Bytes that should be written to the transport.
     Write(Bytes),
+    /// A synthesized protocol event for the caller.
     Event(PeerEvent),
 }
 
+/// A protocol-level failure reported by the sans-IO engine.
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum ProtocolError {
+    /// The transport closed and no more progress is possible.
     #[error("connection is closed")]
     ConnectionClosed,
+    /// The caller attempted to send traffic before the handshake completed.
     #[error("peer is not ready for traffic")]
     PeerNotReady,
+    /// A multipart message did not contain any frames.
     #[error("multipart messages must contain at least one frame")]
     EmptyMessage,
+    /// The 64-byte ZMTP greeting had an invalid signature.
     #[error("invalid ZMTP greeting signature")]
     InvalidGreetingSignature,
+    /// The remote peer spoke an unsupported ZMTP version.
     #[error("unsupported ZMTP version {major}.{minor}")]
-    UnsupportedVersion { major: u8, minor: u8 },
+    UnsupportedVersion {
+        /// The unsupported major protocol version.
+        major: u8,
+        /// The unsupported minor protocol version.
+        minor: u8,
+    },
+    /// The greeting filler bytes were not zeroed as required.
     #[error("invalid greeting filler bytes")]
     InvalidGreetingFiller,
+    /// The configured mechanism is not supported by this build.
     #[error("unsupported security mechanism {0}")]
     MechanismUnsupported(&'static str),
+    /// The remote greeting named an unknown mechanism string.
     #[error("unsupported security mechanism name {0}")]
     UnsupportedMechanismName(String),
+    /// The remote peer selected a different mechanism than expected.
     #[error("security mechanism mismatch: expected {expected:?}, got {actual:?}")]
     MechanismMismatch {
+        /// The mechanism configured locally.
         expected: SecurityMechanism,
+        /// The mechanism advertised by the remote peer.
         actual: SecurityMechanism,
     },
+    /// The greeting `as-server` flag was not valid for the selected mechanism.
     #[error("invalid as-server field {0}")]
     InvalidAsServer(u8),
+    /// NULL security was attempted on a non-local link without opt-in.
     #[error("NULL security is disabled for non-local links without explicit opt-in")]
     InsecureNullForNonLocal,
+    /// CURVE was selected without the required configuration block.
     #[error("missing CURVE configuration")]
     MissingCurveConfig,
+    /// The remote peer requested an unsupported cipher suite.
     #[error("unsupported cipher suite id {0}")]
     UnsupportedCipherSuite(u8),
+    /// The CURVE handshake failed before traffic keys were established.
     #[error("CURVE handshake failed: {0}")]
     CurveHandshake(&'static str),
+    /// CURVE message authentication failed.
     #[error("CURVE authentication failed")]
     CurveAuthenticationFailed,
+    /// An encrypted frame was replayed after it had already been accepted.
     #[error("CURVE replay detected")]
     CurveReplayDetected,
+    /// The configured CURVE public key does not match the secret key.
     #[error("configured CURVE public key does not match the secret key")]
     InvalidCurveKeyPair,
+    /// An encrypted traffic frame could not be decoded.
     #[error("invalid encrypted traffic frame")]
     InvalidEncryptedMessage,
+    /// A frame header used unsupported flag bits.
     #[error("invalid frame flags 0x{0:02x}")]
     InvalidFrameFlags(u8),
+    /// A command frame incorrectly set the MORE bit.
     #[error("command frames must not set MORE")]
     CommandWithMore,
+    /// A long frame length used the reserved sign bit.
     #[error("frame length uses the reserved sign bit")]
     NegativeFrameLength,
+    /// A frame length exceeded the limits supported by the platform.
     #[error("frame size {0} exceeds platform limits")]
     FrameTooLarge(u64),
+    /// A command frame payload was malformed.
     #[error("invalid command frame")]
     InvalidCommandFrame,
+    /// A message frame arrived while the peer was still handshaking.
     #[error("unexpected message frame during handshake")]
     UnexpectedMessageDuringHandshake,
+    /// A command arrived in an unexpected handshake state.
     #[error("unexpected command {0} during handshake")]
     UnexpectedHandshakeCommand(&'static str),
+    /// A command arrived in an unexpected traffic state.
     #[error("unexpected command {0} during traffic")]
     UnexpectedTrafficCommand(&'static str),
+    /// The remote peer reported a fatal error command.
     #[error("remote peer reported fatal error: {0}")]
     RemoteError(String),
+    /// A metadata property name was invalid.
     #[error("invalid metadata name {0:?}")]
     InvalidMetadataName(Bytes),
+    /// A required metadata property was missing.
     #[error("missing metadata property {0}")]
     MissingMetadata(&'static str),
+    /// A handshake metadata value contained an invalid socket type.
     #[error("invalid socket type {0:?}")]
     InvalidSocketType(Bytes),
+    /// The remote socket type is incompatible with the local one.
     #[error("incompatible socket types: local {local:?}, remote {remote:?}")]
     IncompatibleSocketTypes {
+        /// The socket type configured locally.
         local: SocketType,
+        /// The socket type reported by the remote peer.
         remote: SocketType,
     },
+    /// A REQ/REP envelope was missing the required empty delimiter frame.
     #[error("missing request envelope delimiter")]
     MissingEnvelopeDelimiter,
+    /// A request or reply did not contain any body frames.
     #[error("request messages must contain at least one body frame")]
     MissingBodyFrames,
+    /// No peers were available to route a message to.
     #[error("no available peers")]
     NoAvailablePeers,
+    /// A REQ socket operation violated its strict send/receive alternation.
     #[error("REQ state violation: {0}")]
     ReqStateViolation(&'static str),
+    /// A REP socket operation violated its active-request rules.
     #[error("REP state violation: {0}")]
     RepStateViolation(&'static str),
+    /// A cancellation referenced a subscription that was not active.
     #[error("subscription was not active")]
     UnknownSubscription,
 }

@@ -1,3 +1,5 @@
+//! Endpoint parsing, binding options, and transport metadata.
+
 use std::fmt;
 use std::net::SocketAddr;
 #[cfg(unix)]
@@ -7,20 +9,36 @@ use crate::LinkScope;
 
 use super::TokioCelerityError;
 
+/// The concrete transport used by an endpoint.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TransportKind {
+    /// TCP over an IP network.
     Tcp,
+    /// A Unix domain socket endpoint.
     Ipc,
 }
 
+/// A parsed endpoint address.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Endpoint {
+    /// A TCP host:port target.
     Tcp(String),
     #[cfg(unix)]
+    /// An absolute Unix domain socket path.
     Ipc(PathBuf),
 }
 
 impl Endpoint {
+    /// Parses a TCP or IPC endpoint string.
+    ///
+    /// Bare `host:port` values are treated as TCP. On Unix platforms,
+    /// `ipc:///absolute/path.sock` is also accepted.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TokioCelerityError::InvalidEndpoint`] for malformed endpoint
+    /// strings and [`TokioCelerityError::UnsupportedEndpoint`] for schemes the
+    /// runtime does not support.
     pub fn parse(endpoint: &str) -> Result<Self, TokioCelerityError> {
         if let Some(target) = endpoint.strip_prefix("tcp://") {
             if target.is_empty() {
@@ -57,6 +75,7 @@ impl Endpoint {
         Ok(Self::Tcp(endpoint.to_owned()))
     }
 
+    /// Returns the transport kind implied by the endpoint.
     pub fn transport_kind(&self) -> TransportKind {
         match self {
             Self::Tcp(_) => TransportKind::Tcp,
@@ -96,14 +115,20 @@ impl fmt::Display for Endpoint {
     }
 }
 
+/// Marker type for future connect-time options.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct ConnectOptions;
 
+/// Listener configuration used when binding an endpoint.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BindOptions {
+    /// File mode applied to a newly created IPC socket path.
     pub ipc_mode: u32,
+    /// Whether an abandoned IPC socket should be removed before binding.
     pub remove_stale_socket: bool,
+    /// Whether the bound IPC socket path should be removed on drop.
     pub remove_on_drop: bool,
+    /// Whether missing parent directories should be created automatically.
     pub create_parent_dirs: bool,
 }
 
@@ -118,10 +143,14 @@ impl Default for BindOptions {
     }
 }
 
+/// Runtime metadata derived from an accepted or connected transport.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TransportMeta {
+    /// The transport family in use.
     pub kind: TransportKind,
+    /// Whether the transport is local-only or potentially remote.
     pub link_scope: LinkScope,
+    /// Whether NULL security is authorized for this local transport.
     pub null_authorized: bool,
 }
 

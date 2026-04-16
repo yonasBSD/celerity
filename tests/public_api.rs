@@ -1,3 +1,5 @@
+//! Public API smoke tests.
+
 use bytes::Bytes;
 use celerity::{MetadataMap, ProtocolError};
 

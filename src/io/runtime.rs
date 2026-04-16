@@ -1,3 +1,5 @@
+//! Tokio task orchestration for a single peer connection.
+
 use std::collections::VecDeque;
 use std::future::{pending, ready};
 use std::time::Duration;
@@ -47,6 +49,7 @@ struct DrainState {
     has_more: bool,
 }
 
+/// A Tokio-driven connection wrapper around [`crate::CelerityPeer`].
 pub struct TokioCelerity {
     command_tx: mpsc::Sender<RuntimeCommand>,
     event_rx: mpsc::Receiver<PeerEvent>,
@@ -55,12 +58,24 @@ pub struct TokioCelerity {
 }
 
 impl TokioCelerity {
+    /// Connects to an endpoint and spawns a Tokio task to drive the peer.
+    ///
+    /// # Errors
+    ///
+    /// Returns any endpoint parsing, transport, local-authorization, or
+    /// protocol-validation error encountered before the task starts.
     pub async fn connect(endpoint: &str, config: PeerConfig) -> Result<Self, TokioCelerityError> {
         let endpoint = Endpoint::parse(endpoint)?;
         let (stream, transport) = connect_any_stream(&endpoint, config.security.local_auth).await?;
         Self::from_stream(stream, transport, config)
     }
 
+    /// Wraps an existing stream and starts the Tokio runtime driver for it.
+    ///
+    /// # Errors
+    ///
+    /// Returns transport-policy or protocol-validation errors detected before
+    /// the background task is spawned.
     pub fn from_stream<S>(
         stream: S,
         transport: TransportMeta,
@@ -96,18 +111,36 @@ impl TokioCelerity {
         })
     }
 
+    /// Submits an outbound item to the background runtime.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the background task has already ended or if the
+    /// runtime rejects the item while processing it.
     pub async fn send(&self, item: OutboundItem) -> Result<(), TokioCelerityError> {
         send_runtime_command(&self.command_tx, &self.terminal_rx, item).await
     }
 
+    /// Attempts to submit an outbound item without waiting for queue capacity.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TokioCelerityError::QueueFull`] when the command queue is
+    /// full, or another runtime error if the background task has ended.
     pub async fn try_send(&self, item: OutboundItem) -> Result<(), TokioCelerityError> {
         try_send_runtime_command(&self.command_tx, &self.terminal_rx, item).await
     }
 
+    /// Waits for the next peer event from the background task.
     pub async fn recv(&mut self) -> Option<PeerEvent> {
         self.event_rx.recv().await
     }
 
+    /// Waits for the background task to finish.
+    ///
+    /// # Errors
+    ///
+    /// Returns the terminal runtime error if the task failed.
     pub async fn join(self) -> Result<(), TokioCelerityError> {
         self.task.await?
     }

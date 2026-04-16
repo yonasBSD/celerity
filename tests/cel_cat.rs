@@ -1,3 +1,5 @@
+//! End-to-end CLI integration tests for `cel-cat`.
+
 #![cfg(feature = "cli")]
 
 use std::io::{BufRead, BufReader};
