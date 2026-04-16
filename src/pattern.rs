@@ -378,7 +378,7 @@ where
         self.ready_peers.retain(|candidate| *candidate != peer);
         if self.active.as_ref().map(|active| active.peer) == Some(peer) {
             self.active = None;
-            return self.dispatch_next();
+            return Ok(self.dispatch_next());
         }
         Ok(Vec::new())
     }
@@ -407,7 +407,7 @@ where
                     self.ready_peers.push_back(peer);
                 }
                 if self.active.is_none() {
-                    return self.dispatch_next();
+                    return Ok(self.dispatch_next());
                 }
                 Ok(Vec::new())
             }
@@ -450,33 +450,32 @@ where
             peer: active.peer,
             item: OutboundItem::Message(wire_message),
         }];
-        out.extend(self.dispatch_next()?);
+        out.extend(self.dispatch_next());
         Ok(out)
     }
 
-    fn dispatch_next(&mut self) -> Result<Vec<PatternAction<PeerId>>, ProtocolError> {
-        let Some(peer) = self.ready_peers.pop_front() else {
-            return Ok(Vec::new());
-        };
+    fn dispatch_next(&mut self) -> Vec<PatternAction<PeerId>> {
+        while let Some(peer) = self.ready_peers.pop_front() {
+            let Some(queue) = self.queues.get_mut(&peer) else {
+                continue;
+            };
+            let Some(request) = queue.pop_front() else {
+                continue;
+            };
 
-        let queue = self
-            .queues
-            .get_mut(&peer)
-            .expect("ready peer must have an existing queue");
-        let request = queue
-            .pop_front()
-            .expect("ready peer queue must be non-empty");
+            self.active = Some(ActiveReply {
+                peer,
+                envelope: request.envelope,
+            });
 
-        self.active = Some(ActiveReply {
-            peer,
-            envelope: request.envelope,
-        });
+            // REP exposes one active request at a time until reply() consumes it.
+            return vec![PatternAction::Deliver {
+                peer,
+                message: request.body,
+            }];
+        }
 
-        // REP exposes one active request at a time until reply() consumes it.
-        Ok(vec![PatternAction::Deliver {
-            peer,
-            message: request.body,
-        }])
+        Vec::new()
     }
 }
 
@@ -495,7 +494,7 @@ fn decrement_topic(topics: &mut HashMap<Bytes, usize>, topic: Bytes) -> Result<(
 }
 
 fn split_envelope(message: Multipart) -> Result<(Multipart, Multipart), ProtocolError> {
-    let Some(delimiter_index) = message.iter().position(|frame| frame.is_empty()) else {
+    let Some(delimiter_index) = message.iter().position(Bytes::is_empty) else {
         return Err(ProtocolError::MissingEnvelopeDelimiter);
     };
 
