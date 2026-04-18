@@ -426,7 +426,7 @@ fn inspect_ipc_path(path: &Path) -> Result<IpcInspection, String> {
     let parent_metadata = std::fs::metadata(parent)
         .map_err(|err| format!("failed to stat parent directory: {err}"))?;
 
-    let current_uid = unsafe { libc::geteuid() };
+    let current_uid = rustix::process::geteuid().as_raw();
     let owner_matches = metadata.uid() == current_uid;
     let parent_owner_matches = parent_metadata.uid() == current_uid;
     let parent_world_writable = parent_metadata.mode() & 0o002 != 0;
