@@ -166,12 +166,14 @@ pub struct CurveKeyPair {
 
 impl CurveKeyPair {
     /// Builds a keypair from explicit secret and public key bytes.
+    #[must_use]
     pub const fn from_parts(secret: [u8; 32], public: [u8; 32]) -> Self {
         Self { secret, public }
     }
 
     #[cfg(feature = "curve")]
     /// Derives the public key for an X25519 secret key.
+    #[must_use]
     pub fn from_secret(secret: [u8; 32]) -> Self {
         use x25519_dalek::{PublicKey, StaticSecret};
 
@@ -185,6 +187,7 @@ impl CurveKeyPair {
 
     #[cfg(feature = "curve")]
     /// Generates a random X25519 keypair.
+    #[must_use]
     pub fn generate() -> Self {
         use rand_core::OsRng;
         use x25519_dalek::{PublicKey, StaticSecret};
@@ -239,6 +242,7 @@ impl Default for CurveConfig {
 impl CurveConfig {
     #[cfg(feature = "curve")]
     /// Replaces the local static keypair with a freshly generated one.
+    #[must_use]
     pub fn with_generated_keypair(self) -> Self {
         let mut next = self;
         next.local_static_keypair = CurveKeyPair::generate();
@@ -247,6 +251,7 @@ impl CurveConfig {
 
     #[cfg(not(feature = "curve"))]
     /// Returns the configuration unchanged when the `curve` feature is disabled.
+    #[must_use]
     pub fn with_generated_keypair(self) -> Self {
         self
     }
@@ -305,6 +310,7 @@ pub struct SecurityConfig {
 
 impl SecurityConfig {
     /// Creates a security configuration for a mechanism with sensible defaults.
+    #[must_use]
     pub fn new(mechanism: SecurityMechanism) -> Self {
         Self {
             mechanism,
@@ -319,16 +325,19 @@ impl SecurityConfig {
     }
 
     /// Creates a configuration for the NULL mechanism.
+    #[must_use]
     pub fn null() -> Self {
         Self::new(SecurityMechanism::Null)
     }
 
     /// Creates a configuration for the CURVE mechanism.
+    #[must_use]
     pub fn curve() -> Self {
         Self::new(SecurityMechanism::Curve)
     }
 
     /// Chooses a default mechanism for the transport scope.
+    #[must_use]
     pub fn default_for(link_scope: LinkScope) -> Self {
         match link_scope {
             // Local links default to NULL for easier same-host bootstrapping.
@@ -338,24 +347,28 @@ impl SecurityConfig {
     }
 
     /// Enables or disables explicit opt-in for non-local NULL links.
+    #[must_use]
     pub fn with_insecure_null(mut self, allow_insecure_null: bool) -> Self {
         self.allow_insecure_null = allow_insecure_null;
         self
     }
 
     /// Replaces the attached security policy.
+    #[must_use]
     pub fn with_policy(mut self, policy: SecurityPolicy) -> Self {
         self.policy = policy;
         self
     }
 
     /// Replaces the local IPC authorization policy.
+    #[must_use]
     pub fn with_local_auth_policy(mut self, local_auth: LocalAuthPolicy) -> Self {
         self.local_auth = local_auth;
         self
     }
 
     /// Replaces the CURVE configuration block.
+    #[must_use]
     pub fn with_curve_config(mut self, curve: CurveConfig) -> Self {
         self.curve = Some(curve);
         self
@@ -370,6 +383,7 @@ pub struct MetadataMap {
 
 impl MetadataMap {
     /// Creates an empty metadata map.
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
@@ -482,6 +496,7 @@ pub struct PeerConfig {
 
 impl PeerConfig {
     /// Creates a peer configuration with defaults derived from the link scope.
+    #[must_use]
     pub fn new(
         socket_type: SocketType,
         security_role: SecurityRole,
@@ -499,24 +514,28 @@ impl PeerConfig {
     }
 
     /// Replaces the security configuration.
+    #[must_use]
     pub fn with_security(mut self, security: SecurityConfig) -> Self {
         self.security = security;
         self
     }
 
     /// Sets the handshake identity advertised by the peer.
+    #[must_use]
     pub fn with_identity(mut self, identity: impl Into<Bytes>) -> Self {
         self.identity = Some(identity.into());
         self
     }
 
     /// Replaces the additional handshake metadata.
+    #[must_use]
     pub fn with_metadata(mut self, metadata: MetadataMap) -> Self {
         self.metadata = metadata;
         self
     }
 
     /// Replaces the high-water mark configuration.
+    #[must_use]
     pub fn with_hwm(mut self, hwm: HwmConfig) -> Self {
         self.hwm = hwm;
         self
