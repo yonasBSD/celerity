@@ -153,15 +153,6 @@ cargo test
 cargo test --all-features
 ```
 
-## Release Notes
-
-For the initial release:
-
-```bash
-git tag -a v0.1.1 -m "Release 0.1.1"
-git push origin v0.1.1
-```
-
 ## License
 
 Licensed under:
