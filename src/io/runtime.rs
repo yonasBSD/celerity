@@ -184,11 +184,11 @@ async fn run_tokio_peer(
         tokio::select! {
             biased;
 
-            _ = wait_for_handshake_deadline(handshake_deadline), if !ready_for_traffic => {
+            () = wait_for_handshake_deadline(handshake_deadline), if !ready_for_traffic => {
                 return Err(TokioCelerityError::HandshakeTimeout);
             }
 
-            _ = ready(()), if needs_drain => {
+            () = ready(()), if needs_drain => {
                 // Drain protocol output before taking more input or new commands.
                 needs_drain = false;
                 let drain = pump_peer_actions(&mut peer, &mut stream, &event_tx, hwm).await?;
@@ -320,8 +320,7 @@ async fn forward_peer_event(
     // Only message events are droppable; control flow events must always get through.
     if hwm.policy == HwmPolicy::DropNewest && matches!(event, PeerEvent::Message(_)) {
         return match event_tx.try_send(event) {
-            Ok(()) => Ok(()),
-            Err(mpsc::error::TrySendError::Full(_)) => Ok(()),
+            Ok(()) | Err(mpsc::error::TrySendError::Full(_)) => Ok(()),
             Err(mpsc::error::TrySendError::Closed(_)) => {
                 Err(TokioCelerityError::ChannelClosed("peer event channel"))
             }
@@ -484,8 +483,10 @@ mod tests {
         let null_config = PeerConfig::new(SocketType::Req, SecurityRole::Client, LinkScope::Local);
         assert!(curve_handshake_deadline(&null_config).is_none());
 
-        let mut curve = crate::CurveConfig::default();
-        curve.handshake_timeout_ms = 0;
+        let curve = crate::CurveConfig {
+            handshake_timeout_ms: 0,
+            ..crate::CurveConfig::default()
+        };
         let curve_config =
             PeerConfig::new(SocketType::Req, SecurityRole::Client, LinkScope::NonLocal)
                 .with_security(SecurityConfig::curve().with_curve_config(curve));
@@ -499,9 +500,11 @@ mod tests {
 
     #[test]
     fn queue_helpers_respect_policy_and_capacity() {
-        let mut hwm = HwmConfig::default();
-        hwm.outbound_messages = 1;
-        hwm.outbound_bytes = 1;
+        let mut hwm = HwmConfig {
+            outbound_messages: 1,
+            outbound_bytes: 1,
+            ..HwmConfig::default()
+        };
 
         assert!(queue_has_headroom(hwm, 0, 0));
         assert!(!queue_has_headroom(hwm, 1, 0));

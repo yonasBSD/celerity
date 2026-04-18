@@ -114,9 +114,8 @@ impl PubSocket {
                     tokio::time::sleep(SUBSCRIPTION_SETTLE_DELAY).await;
                     return Ok(true);
                 }
-                Ok(Ok(())) => continue,
-                Ok(Err(_)) => return Ok(*self.ready_rx.borrow() > 0),
-                Err(_) => return Ok(*self.ready_rx.borrow() > 0),
+                Ok(Ok(())) => {}
+                Ok(Err(_)) | Err(_) => return Ok(*self.ready_rx.borrow() > 0),
             }
         }
     }
@@ -518,18 +517,18 @@ async fn dispatch_pub_message(
     message: Multipart,
 ) -> Result<(), TokioCelerityError> {
     for action in pub_core.publish(&message)? {
-        if let PatternAction::Send { peer, item } = action {
-            if let Some(handle) = peers.get(&peer) {
-                // PUB fanout is best-effort; a full peer queue does not stall everyone else.
-                match try_send_runtime_command(&handle.command_tx, &handle.terminal_rx, item).await
-                {
-                    Ok(()) | Err(TokioCelerityError::QueueFull) => {}
-                    Err(
-                        TokioCelerityError::BackgroundTaskEnded
-                        | TokioCelerityError::ChannelClosed(_),
-                    ) => {}
-                    Err(err) => return Err(err),
-                }
+        if let PatternAction::Send { peer, item } = action
+            && let Some(handle) = peers.get(&peer)
+        {
+            // PUB fanout is best-effort; a full peer queue does not stall everyone else.
+            match try_send_runtime_command(&handle.command_tx, &handle.terminal_rx, item).await {
+                Ok(())
+                | Err(
+                    TokioCelerityError::QueueFull
+                    | TokioCelerityError::BackgroundTaskEnded
+                    | TokioCelerityError::ChannelClosed(_),
+                ) => {}
+                Err(err) => return Err(err),
             }
         }
     }
@@ -631,10 +630,10 @@ async fn run_req_socket(
                 match event {
                     Some(event) => {
                         for action in req_core.on_peer_event(peer, event)? {
-                            if let PatternAction::Deliver { message, .. } = action {
-                                if let Some(reply_tx) = in_flight.take() {
-                                    let _ = reply_tx.send(Ok(message));
-                                }
+                            if let PatternAction::Deliver { message, .. } = action
+                                && let Some(reply_tx) = in_flight.take()
+                            {
+                                let _ = reply_tx.send(Ok(message));
                             }
                         }
                         drive_req_queue(&mut req_core, &connection, &mut queue, &mut in_flight).await?;
