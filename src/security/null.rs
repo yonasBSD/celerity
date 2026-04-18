@@ -39,26 +39,16 @@ impl MechanismDriver for NullMechanism {
         match command {
             Command::Ready(bytes) => {
                 let metadata = decode_metadata(bytes)?;
-                let peer_socket_type = validate_remote_metadata(config, &metadata)?;
+                let _ = validate_remote_metadata(config, &metadata)?;
                 self.received_ready = true;
-                self.peer_metadata = Some(metadata.clone());
+                self.peer_metadata = Some(metadata);
 
                 if matches!(config.security_role, SecurityRole::Server) && !self.sent_ready {
                     output.push_back(ProtocolAction::Write(encode_ready(local_metadata)?));
                     self.sent_ready = true;
                 }
 
-                Ok(self
-                    .finish_if_ready()?
-                    .or_else(|| {
-                        self.peer_metadata
-                            .as_ref()
-                            .map(|metadata| HandshakeComplete {
-                                peer_socket_type,
-                                metadata: metadata.clone(),
-                            })
-                    })
-                    .filter(|_| self.sent_ready && self.received_ready))
+                self.finish_if_ready()
             }
             Command::Error(reason) => Err(ProtocolError::RemoteError(
                 String::from_utf8_lossy(&reason).into_owned(),
