@@ -516,8 +516,10 @@ async fn dispatch_pub_message(
                 match try_send_runtime_command(&handle.command_tx, &handle.terminal_rx, item).await
                 {
                     Ok(()) | Err(TokioCelerityError::QueueFull) => {}
-                    Err(TokioCelerityError::BackgroundTaskEnded)
-                    | Err(TokioCelerityError::ChannelClosed(_)) => {}
+                    Err(
+                        TokioCelerityError::BackgroundTaskEnded
+                        | TokioCelerityError::ChannelClosed(_),
+                    ) => {}
                     Err(err) => return Err(err),
                 }
             }
