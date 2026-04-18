@@ -120,11 +120,22 @@ pub(super) fn decode_initiate_body(mut body: Bytes) -> Result<InitiateBody, Prot
     Ok(InitiateBody { cookie, metadata })
 }
 
-pub(super) fn append_transcript(transcript: &mut Vec<u8>, label: &[u8], payload: &[u8]) {
-    transcript.extend_from_slice(&(label.len() as u16).to_be_bytes());
+pub(super) fn append_transcript(
+    transcript: &mut Vec<u8>,
+    label: &[u8],
+    payload: &[u8],
+) -> Result<(), ProtocolError> {
+    let label_len =
+        u16::try_from(label.len()).map_err(|_| ProtocolError::CurveHandshake("label too large"))?;
+    let payload_len = u32::try_from(payload.len())
+        .map_err(|_| ProtocolError::CurveHandshake("payload too large"))?;
+
+    transcript.extend_from_slice(&label_len.to_be_bytes());
     transcript.extend_from_slice(label);
-    transcript.extend_from_slice(&(payload.len() as u32).to_be_bytes());
+    transcript.extend_from_slice(&payload_len.to_be_bytes());
     transcript.extend_from_slice(payload);
+
+    Ok(())
 }
 
 fn take_array<const N: usize>(
@@ -201,7 +212,7 @@ mod tests {
     #[test]
     fn append_transcript_records_label_and_payload_lengths() {
         let mut transcript = Vec::new();
-        append_transcript(&mut transcript, b"HELLO", b"abc");
+        assert!(append_transcript(&mut transcript, b"HELLO", b"abc").is_ok());
 
         assert_eq!(
             transcript,

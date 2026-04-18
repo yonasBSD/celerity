@@ -94,7 +94,7 @@ impl MechanismDriver for CurveMechanism {
         {
             let _ = output;
             let _ = config;
-            return Err(ProtocolError::MechanismUnsupported("CURVE-RS"));
+            Err(ProtocolError::MechanismUnsupported("CURVE-RS"))
         }
 
         #[cfg(feature = "curve")]
@@ -111,7 +111,7 @@ impl MechanismDriver for CurveMechanism {
             let client_eph_public = public_from_secret(client_eph_secret);
             let client_nonce_seed = random_bytes::<8>();
             // Clients may pin the expected server key without exposing it in cleartext.
-            let server_key_hash = curve.server_public_key.map(sha256).unwrap_or([0; 32]);
+            let server_key_hash = curve.server_public_key.map_or([0; 32], sha256);
 
             let mut payload = BytesMut::with_capacity(74);
             payload.put_u8(1);
@@ -121,7 +121,7 @@ impl MechanismDriver for CurveMechanism {
             payload.extend_from_slice(&client_nonce_seed);
             let payload = payload.freeze();
 
-            append_transcript(&mut self.transcript, b"HELLO", &payload);
+            append_transcript(&mut self.transcript, b"HELLO", &payload)?;
             self.client_eph_secret = Some(client_eph_secret);
             self.client_eph_public = Some(client_eph_public);
             self.client_nonce_seed = Some(client_nonce_seed);
@@ -147,7 +147,7 @@ impl MechanismDriver for CurveMechanism {
             let _ = local_metadata;
             let _ = command;
             let _ = output;
-            return Err(ProtocolError::MechanismUnsupported("CURVE-RS"));
+            Err(ProtocolError::MechanismUnsupported("CURVE-RS"))
         }
 
         #[cfg(feature = "curve")]
@@ -191,7 +191,7 @@ impl MechanismDriver for CurveMechanism {
         #[cfg(not(feature = "curve"))]
         {
             let _ = item;
-            return Err(ProtocolError::MechanismUnsupported("CURVE-RS"));
+            Err(ProtocolError::MechanismUnsupported("CURVE-RS"))
         }
 
         #[cfg(feature = "curve")]
@@ -208,7 +208,7 @@ impl MechanismDriver for CurveMechanism {
         #[cfg(not(feature = "curve"))]
         {
             let _ = payload;
-            return Err(ProtocolError::MechanismUnsupported("CURVE-RS"));
+            Err(ProtocolError::MechanismUnsupported("CURVE-RS"))
         }
 
         #[cfg(feature = "curve")]
@@ -248,7 +248,7 @@ impl CurveMechanism {
             return Err(ProtocolError::CurveAuthenticationFailed);
         }
 
-        append_transcript(&mut self.transcript, b"HELLO", payload);
+        append_transcript(&mut self.transcript, b"HELLO", payload)?;
 
         let server_eph_secret = random_bytes::<32>();
         let server_eph_public = public_from_secret(server_eph_secret);
@@ -276,7 +276,7 @@ impl CurveMechanism {
         welcome.extend_from_slice(&ciphertext);
         let welcome = welcome.freeze();
 
-        append_transcript(&mut self.transcript, b"WELCOME", &welcome);
+        append_transcript(&mut self.transcript, b"WELCOME", &welcome)?;
         self.client_eph_public = Some(hello.client_eph_public);
         self.client_nonce_seed = Some(hello.client_nonce_seed);
         self.server_eph_secret = Some(server_eph_secret);
@@ -328,7 +328,7 @@ impl CurveMechanism {
             return Err(ProtocolError::CurveAuthenticationFailed);
         }
 
-        append_transcript(&mut self.transcript, b"WELCOME", payload);
+        append_transcript(&mut self.transcript, b"WELCOME", payload)?;
 
         let local_static_secret = local_static_secret(config)?;
         let local_static_public = local_static_public(config)?;
@@ -342,9 +342,11 @@ impl CurveMechanism {
         let initiate_key = derive_key(&self.transcript, &parts, b"curve-rs-initiate")?;
 
         let metadata = encode_metadata(local_metadata)?;
+        let metadata_len = u32::try_from(metadata.len())
+            .map_err(|_| ProtocolError::CurveHandshake("INITIATE metadata too large"))?;
         let mut body = BytesMut::with_capacity(36 + metadata.len());
         body.extend_from_slice(&welcome_body.cookie);
-        body.put_u32(metadata.len() as u32);
+        body.put_u32(metadata_len);
         body.extend_from_slice(&metadata);
         let body = body.freeze();
         let ciphertext = encrypt_aead(
@@ -359,7 +361,7 @@ impl CurveMechanism {
         initiate.extend_from_slice(&ciphertext);
         let initiate = initiate.freeze();
 
-        append_transcript(&mut self.transcript, b"INITIATE", &initiate);
+        append_transcript(&mut self.transcript, b"INITIATE", &initiate)?;
         self.server_eph_public = Some(welcome.server_eph_public);
         self.server_static_public = Some(welcome_body.server_static_public);
         self.server_nonce_seed = Some(welcome_body.server_nonce_seed);
@@ -426,7 +428,7 @@ impl CurveMechanism {
             return Err(ProtocolError::CurveAuthenticationFailed);
         }
 
-        append_transcript(&mut self.transcript, b"INITIATE", payload);
+        append_transcript(&mut self.transcript, b"INITIATE", payload)?;
         let peer_socket_type = validate_remote_metadata(config, &initiate_body.metadata)?;
         let ready_key = derive_key(&self.transcript, &parts, b"curve-rs-ready")?;
         let ready_body = encode_metadata(local_metadata)?;
