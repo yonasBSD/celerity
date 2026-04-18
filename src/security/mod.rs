@@ -44,14 +44,16 @@ pub(crate) trait MechanismDriver {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Mechanism {
     Null(NullMechanism),
-    Curve(CurveMechanism),
+    Curve(Box<CurveMechanism>),
 }
 
 impl Mechanism {
     pub(crate) fn new(config: &PeerConfig) -> Self {
         match config.security.mechanism {
             SecurityMechanism::Null => Self::Null(NullMechanism::default()),
-            SecurityMechanism::Curve => Self::Curve(CurveMechanism::new(config.security_role)),
+            SecurityMechanism::Curve => {
+                Self::Curve(Box::new(CurveMechanism::new(config.security_role)))
+            }
         }
     }
 
