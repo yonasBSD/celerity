@@ -1,5 +1,9 @@
 # Celerity
 
+[![crates.io](https://img.shields.io/crates/v/celerity)](https://crates.io/crates/celerity)
+[![docs](https://img.shields.io/docsrs/celerity)](https://docs.rs/celerity)
+[![Test](https://github.com/ShemShadrack/celerity/actions/workflows/ci.yml/badge.svg)](https://github.com/ShemShadrack/celerity/actions)
+
 Celerity is a pure Rust implementation of ZMTP 3.1 built around a sans-IO core. The protocol engine stays as a state machine, while the Tokio layer handles TCP and Unix domain socket transport for practical use.
 
 The project is aimed at people who want a small, direct Rust messaging stack without pulling in a C library or hiding the wire protocol behind too much magic.
