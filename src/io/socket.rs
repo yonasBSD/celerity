@@ -22,6 +22,7 @@ use super::{
 };
 
 /// A convenience wrapper for PUB semantics over Tokio transports.
+#[derive(Debug)]
 pub struct PubSocket {
     command_tx: mpsc::Sender<PubCommand>,
     ready_rx: watch::Receiver<usize>,
@@ -146,6 +147,7 @@ impl PubSocket {
 }
 
 /// A convenience wrapper for SUB semantics over Tokio transports.
+#[derive(Debug)]
 pub struct SubSocket {
     command_tx: mpsc::Sender<SubCommand>,
     message_rx: mpsc::Receiver<Result<Multipart, TokioCelerityError>>,
@@ -255,6 +257,7 @@ impl SubSocket {
 }
 
 /// A convenience wrapper for REQ semantics over Tokio transports.
+#[derive(Debug)]
 pub struct ReqSocket {
     command_tx: mpsc::Sender<ReqCommand>,
     task: JoinHandle<Result<(), TokioCelerityError>>,
@@ -306,6 +309,7 @@ impl ReqSocket {
 }
 
 /// A convenience wrapper for REP semantics over Tokio transports.
+#[derive(Debug)]
 pub struct RepSocket {
     command_tx: mpsc::Sender<RepCommand>,
     request_rx: mpsc::Receiver<Result<Multipart, TokioCelerityError>>,
