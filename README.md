@@ -138,7 +138,7 @@ Add the crate with the feature set you need:
 
 ```toml
 [dependencies]
-celerity = { version = "0.1.0", features = ["tokio", "ipc", "curve"] }
+celerity = { version = "0.1.1", features = ["tokio", "ipc", "curve"] }
 ```
 
 At the core is `CelerityPeer`, which owns protocol state but no sockets. The Tokio wrappers in `celerity::io` sit on top when you want real network transport.
@@ -158,8 +158,8 @@ cargo test --all-features
 For the initial release:
 
 ```bash
-git tag -a v0.1.0 -m "Initial release with IPC and CURVE"
-git push origin v0.1.0
+git tag -a v0.1.1 -m "Release 0.1.1"
+git push origin v0.1.1
 ```
 
 ## License
