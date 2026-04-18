@@ -98,7 +98,7 @@ impl CelerityPeer {
                     let Some(bytes) = self.input.take_exact(GREETING_SIZE) else {
                         break;
                     };
-                    self.process_greeting(bytes)?;
+                    self.process_greeting(&bytes)?;
                 }
                 PeerState::Handshake => {
                     let Some(frame) = try_decode_frame(&mut self.input)? else {
@@ -149,7 +149,7 @@ impl CelerityPeer {
         self.output.pop_front()
     }
 
-    fn process_greeting(&mut self, bytes: Bytes) -> Result<(), ProtocolError> {
+    fn process_greeting(&mut self, bytes: &[u8]) -> Result<(), ProtocolError> {
         let greeting = decode_greeting(bytes)?;
         let expected = self.config.security.mechanism;
         if greeting.mechanism != expected {

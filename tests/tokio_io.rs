@@ -27,13 +27,6 @@ fn ok<T, E: core::fmt::Debug>(result: Result<T, E>) -> T {
     }
 }
 
-fn err<T, E>(result: Result<T, E>) -> E {
-    match result {
-        Ok(_) => panic!("expected Err(..), got Ok(..)"),
-        Err(err) => err,
-    }
-}
-
 fn some<T>(value: Option<T>) -> T {
     match value {
         Some(value) => value,
@@ -175,7 +168,9 @@ async fn curve_handshake_timeout_is_enforced() {
     );
     let client = ok(client.await);
 
-    let err = err(client.join().await);
+    let Err(err) = client.join().await else {
+        panic!("expected Err(..), got Ok(..)");
+    };
     assert!(matches!(err, TokioCelerityError::HandshakeTimeout));
     ok(server.await);
 }
@@ -192,7 +187,7 @@ async fn curve_keypair_mismatch_is_rejected_early() {
     let stream = ok(tokio::net::TcpStream::connect(addr).await);
     let mut curve = CurveConfig::default().with_generated_keypair();
     curve.local_static_keypair.public[0] ^= 0x01;
-    let err = match TokioCelerity::from_stream(
+    let Err(err) = TokioCelerity::from_stream(
         stream,
         TransportMeta {
             kind: TransportKind::Tcp,
@@ -201,9 +196,8 @@ async fn curve_keypair_mismatch_is_rejected_early() {
         },
         PeerConfig::new(SocketType::Req, SecurityRole::Client, LinkScope::Local)
             .with_security(SecurityConfig::curve().with_curve_config(curve)),
-    ) {
-        Ok(_) => panic!("mismatched CURVE keypair should be rejected"),
-        Err(err) => err,
+    ) else {
+        panic!("mismatched CURVE keypair should be rejected");
     };
 
     assert!(matches!(
@@ -223,9 +217,11 @@ async fn drop_newest_drops_pre_auth_messages_instead_of_blocking() {
         tokio::time::sleep(Duration::from_millis(150)).await;
     });
 
-    let mut hwm = HwmConfig::default();
-    hwm.outbound_messages = 1;
-    hwm.policy = HwmPolicy::DropNewest;
+    let hwm = HwmConfig {
+        outbound_messages: 1,
+        policy: HwmPolicy::DropNewest,
+        ..HwmConfig::default()
+    };
 
     let client = TokioCelerity::connect(
         &endpoint,
@@ -415,9 +411,8 @@ async fn ipc_strict_auth_rejects_world_writable_parent() {
     let path = parent.join("celerity.sock");
     let endpoint = format!("ipc://{}", path.display());
 
-    let err = match PubSocket::bind(&endpoint).await {
-        Ok(_) => panic!("bind should fail for a world-writable parent directory"),
-        Err(err) => err,
+    let Err(err) = PubSocket::bind(&endpoint).await else {
+        panic!("bind should fail for a world-writable parent directory");
     };
     assert!(matches!(err, TokioCelerityError::LocalAuth { .. }));
 

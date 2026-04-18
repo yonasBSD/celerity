@@ -150,7 +150,7 @@ pub(crate) fn encode_greeting(config: &PeerConfig) -> Bytes {
     Bytes::copy_from_slice(&bytes)
 }
 
-pub(crate) fn decode_greeting(bytes: Bytes) -> Result<Greeting, ProtocolError> {
+pub(crate) fn decode_greeting(bytes: &[u8]) -> Result<Greeting, ProtocolError> {
     if bytes.len() != GREETING_SIZE {
         return Err(ProtocolError::InvalidGreetingSignature);
     }
@@ -256,7 +256,7 @@ pub(crate) fn encode_outbound_item(item: &OutboundItem) -> Result<Vec<Bytes>, Pr
 pub(crate) fn encode_command(command: Command) -> Result<Bytes, ProtocolError> {
     let (name, payload) = match command {
         Command::Ready(bytes) => (b"READY".as_slice(), bytes),
-        Command::Error(reason) => (b"ERROR".as_slice(), encode_short_string(reason)?),
+        Command::Error(reason) => (b"ERROR".as_slice(), encode_short_string(&reason)?),
         Command::Subscribe(topic) => (b"SUBSCRIBE".as_slice(), topic),
         Command::Cancel(topic) => (b"CANCEL".as_slice(), topic),
         Command::Hello(bytes) => (b"HELLO".as_slice(), bytes),
@@ -265,12 +265,15 @@ pub(crate) fn encode_command(command: Command) -> Result<Bytes, ProtocolError> {
         Command::Message(bytes) => (b"MESSAGE".as_slice(), bytes),
     };
 
+    let name_len =
+        u8::try_from(name.len()).map_err(|_| ProtocolError::FrameTooLarge(name.len() as u64))?;
     let mut body = BytesMut::with_capacity(1 + name.len() + payload.len());
-    body.put_u8(name.len() as u8);
+    body.put_u8(name_len);
     body.extend_from_slice(name);
     body.extend_from_slice(&payload);
+    let body = body.freeze();
 
-    Ok(encode_frame(FrameFlags::COMMAND, body.freeze()))
+    Ok(encode_frame(FrameFlags::COMMAND, &body))
 }
 
 pub(crate) fn decode_command(body: Bytes) -> Result<Command, ProtocolError> {
@@ -312,7 +315,7 @@ pub(crate) fn encode_message_frames(message: &[Bytes]) -> Result<Vec<Bytes>, Pro
         if index + 1 != message.len() {
             flags |= FrameFlags::MORE;
         }
-        out.push(encode_frame(flags, body.clone()));
+        out.push(encode_frame(flags, body));
     }
     Ok(out)
 }
@@ -320,7 +323,7 @@ pub(crate) fn encode_message_frames(message: &[Bytes]) -> Result<Vec<Bytes>, Pro
 pub(crate) fn greeting_as_server(mechanism: SecurityMechanism, role: SecurityRole) -> u8 {
     match mechanism {
         SecurityMechanism::Null => 0,
-        SecurityMechanism::Curve => matches!(role, SecurityRole::Server) as u8,
+        SecurityMechanism::Curve => u8::from(matches!(role, SecurityRole::Server)),
     }
 }
 
@@ -339,7 +342,7 @@ pub(crate) fn encode_raw_frames(frames: &[Bytes]) -> Bytes {
     out.freeze()
 }
 
-fn encode_frame(flags: FrameFlags, body: Bytes) -> Bytes {
+fn encode_frame(flags: FrameFlags, body: &[u8]) -> Bytes {
     let body_len = body.len();
     let long = body_len > u8::MAX as usize;
     let mut header = BytesMut::with_capacity(1 + if long { 8 } else { 1 } + body_len);
@@ -350,11 +353,14 @@ fn encode_frame(flags: FrameFlags, body: Bytes) -> Bytes {
         header.put_u8(flags.bits());
         header.put_u64(body_len as u64);
     } else {
+        let Ok(body_len) = u8::try_from(body_len) else {
+            unreachable!("short frame length was prevalidated");
+        };
         header.put_u8(flags.bits());
-        header.put_u8(body_len as u8);
+        header.put_u8(body_len);
     }
 
-    header.extend_from_slice(&body);
+    header.extend_from_slice(body);
     header.freeze()
 }
 
@@ -364,9 +370,14 @@ pub(crate) fn encode_metadata(metadata: &MetadataMap) -> Result<Bytes, ProtocolE
         if value.len() > MAX_METADATA_VALUE_LEN {
             return Err(ProtocolError::FrameTooLarge(value.len() as u64));
         }
-        out.put_u8(name.len() as u8);
+        let Ok(name_len) = u8::try_from(name.len()) else {
+            unreachable!("metadata names are validated on insert");
+        };
+        let value_len = u32::try_from(value.len())
+            .map_err(|_| ProtocolError::FrameTooLarge(value.len() as u64))?;
+        out.put_u8(name_len);
         out.extend_from_slice(name);
-        out.put_u32(value.len() as u32);
+        out.put_u32(value_len);
         out.extend_from_slice(value);
     }
     Ok(out.freeze())
@@ -404,14 +415,16 @@ pub(crate) fn decode_metadata(bytes: Bytes) -> Result<MetadataMap, ProtocolError
     Ok(metadata)
 }
 
-fn encode_short_string(bytes: Bytes) -> Result<Bytes, ProtocolError> {
+fn encode_short_string(bytes: &[u8]) -> Result<Bytes, ProtocolError> {
     if bytes.len() > u8::MAX as usize {
         return Err(ProtocolError::FrameTooLarge(bytes.len() as u64));
     }
 
+    let len =
+        u8::try_from(bytes.len()).map_err(|_| ProtocolError::FrameTooLarge(bytes.len() as u64))?;
     let mut out = BytesMut::with_capacity(1 + bytes.len());
-    out.put_u8(bytes.len() as u8);
-    out.extend_from_slice(&bytes);
+    out.put_u8(len);
+    out.extend_from_slice(bytes);
     Ok(out.freeze())
 }
 
@@ -486,7 +499,8 @@ mod tests {
     #[test]
     fn greeting_roundtrip() {
         let config = PeerConfig::new(SocketType::Req, SecurityRole::Client, LinkScope::Local);
-        let greeting = ok(decode_greeting(encode_greeting(&config)));
+        let greeting_bytes = encode_greeting(&config);
+        let greeting = ok(decode_greeting(&greeting_bytes));
         assert_eq!(
             greeting,
             Greeting {
@@ -568,7 +582,7 @@ mod tests {
         let greeting = encode_greeting(&config);
         assert_eq!(greeting.len(), GREETING_SIZE);
         assert_eq!(
-            ok(decode_greeting(greeting)).as_server,
+            ok(decode_greeting(&greeting)).as_server,
             greeting_as_server(SecurityMechanism::Curve, SecurityRole::Server)
         );
     }
@@ -580,14 +594,14 @@ mod tests {
         let mut bad_signature = encode_greeting(&config).to_vec();
         bad_signature[0] ^= 0x01;
         assert_eq!(
-            err(decode_greeting(Bytes::from(bad_signature))),
+            err(decode_greeting(&Bytes::from(bad_signature))),
             ProtocolError::InvalidGreetingSignature
         );
 
         let mut bad_version = encode_greeting(&config).to_vec();
         bad_version[10] = 9;
         assert_eq!(
-            err(decode_greeting(Bytes::from(bad_version))),
+            err(decode_greeting(&Bytes::from(bad_version))),
             ProtocolError::UnsupportedVersion { major: 9, minor: 1 }
         );
     }
@@ -601,7 +615,7 @@ mod tests {
         field.fill(0);
         field[..5].copy_from_slice(b"CURVE");
 
-        let decoded = ok(decode_greeting(Bytes::from(greeting)));
+        let decoded = ok(decode_greeting(&Bytes::from(greeting)));
         assert_eq!(decoded.mechanism, SecurityMechanism::Curve);
     }
 
