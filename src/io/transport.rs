@@ -206,7 +206,7 @@ async fn connect_tcp(
     endpoint: &Endpoint,
 ) -> Result<(AnyStream, TransportMeta), TokioCelerityError> {
     let target = endpoint.tcp_target()?;
-    let mut addrs = lookup_host(target)
+    let addrs = lookup_host(target)
         .await
         .map_err(|source| TokioCelerityError::Resolve {
             endpoint: endpoint.to_string(),
@@ -215,7 +215,7 @@ async fn connect_tcp(
 
     let mut last_error = None;
     let mut saw_address = false;
-    while let Some(addr) = addrs.next() {
+    for addr in addrs {
         saw_address = true;
         match TcpStream::connect(addr).await {
             Ok(stream) => {
@@ -314,13 +314,13 @@ async fn bind_ipc_listener(
     local_auth: LocalAuthPolicy,
 ) -> Result<AnyListener, TokioCelerityError> {
     let path = endpoint.ipc_path()?;
-    if bind_options.create_parent_dirs {
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).map_err(|source| TokioCelerityError::Bind {
-                endpoint: endpoint.to_string(),
-                source,
-            })?;
-        }
+    if bind_options.create_parent_dirs
+        && let Some(parent) = path.parent()
+    {
+        std::fs::create_dir_all(parent).map_err(|source| TokioCelerityError::Bind {
+            endpoint: endpoint.to_string(),
+            source,
+        })?;
     }
 
     if let Ok(metadata) = std::fs::symlink_metadata(path) {
@@ -430,7 +430,7 @@ fn inspect_ipc_path(path: &Path) -> Result<IpcInspection, String> {
     let owner_matches = metadata.uid() == current_uid;
     let parent_owner_matches = parent_metadata.uid() == current_uid;
     let parent_world_writable = parent_metadata.mode() & 0o002 != 0;
-    let socket_private_enough = metadata.mode() & 0o077 == 0;
+    let socket_private_enough = metadata.mode().trailing_zeros() >= 6;
 
     Ok(IpcInspection {
         null_authorized: owner_matches
