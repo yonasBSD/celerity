@@ -50,6 +50,7 @@ struct DrainState {
 }
 
 /// A Tokio-driven connection wrapper around [`crate::CelerityPeer`].
+#[derive(Debug)]
 pub struct TokioCelerity {
     command_tx: mpsc::Sender<RuntimeCommand>,
     event_rx: mpsc::Receiver<PeerEvent>,
