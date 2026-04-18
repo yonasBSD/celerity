@@ -244,7 +244,8 @@ impl CelerityPeer {
                 Command::Message(payload) => self.process_secure_message(payload),
             }
         } else {
-            self.process_plain_traffic_frame(flags, body)
+            self.process_plain_traffic_frame(flags, body);
+            Ok(())
         }
     }
 
@@ -300,25 +301,18 @@ impl CelerityPeer {
                     }
                 }
             } else {
-                self.process_plain_traffic_frame(frame.flags, frame.body)?;
+                self.process_plain_traffic_frame(frame.flags, frame.body);
             }
         }
     }
 
-    fn process_plain_traffic_frame(
-        &mut self,
-        flags: FrameFlags,
-        body: Bytes,
-    ) -> Result<(), ProtocolError> {
+    fn process_plain_traffic_frame(&mut self, flags: FrameFlags, body: Bytes) {
         self.current_message.push(body);
-        if flags.contains(FrameFlags::MORE) {
-            Ok(())
-        } else {
+        if !flags.contains(FrameFlags::MORE) {
             // Delivery happens only once we see the final frame of the multipart.
             let message = std::mem::take(&mut self.current_message);
             self.output
                 .push_back(ProtocolAction::Event(PeerEvent::Message(message)));
-            Ok(())
         }
     }
 
@@ -354,9 +348,11 @@ mod tests {
     use bytes::Bytes;
 
     use super::CelerityPeer;
+    #[cfg(feature = "curve")]
+    use crate::CurveConfig;
     use crate::wire::{Command, encode_command, encode_greeting, encode_message_frames};
     use crate::{
-        CurveConfig, LinkScope, OutboundItem, PeerConfig, PeerEvent, ProtocolAction, ProtocolError,
+        LinkScope, OutboundItem, PeerConfig, PeerEvent, ProtocolAction, ProtocolError,
         SecurityConfig, SecurityRole, SocketType,
     };
 

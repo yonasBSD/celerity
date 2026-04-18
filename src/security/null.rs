@@ -26,7 +26,7 @@ impl MechanismDriver for NullMechanism {
             self.sent_ready = true;
         }
 
-        Ok(self.finish_if_ready())
+        self.finish_if_ready()
     }
 
     fn on_command(
@@ -49,7 +49,7 @@ impl MechanismDriver for NullMechanism {
                 }
 
                 Ok(self
-                    .finish_if_ready()
+                    .finish_if_ready()?
                     .or_else(|| {
                         self.peer_metadata
                             .as_ref()
@@ -82,16 +82,19 @@ impl MechanismDriver for NullMechanism {
 }
 
 impl NullMechanism {
-    fn finish_if_ready(&self) -> Option<HandshakeComplete> {
-        if self.sent_ready && self.received_ready {
-            self.peer_metadata
-                .as_ref()
-                .map(|metadata| HandshakeComplete {
-                    peer_socket_type: metadata.socket_type().expect("validated before completion"),
+    fn finish_if_ready(&self) -> Result<Option<HandshakeComplete>, ProtocolError> {
+        if !self.sent_ready || !self.received_ready {
+            return Ok(None);
+        }
+
+        self.peer_metadata
+            .as_ref()
+            .map(|metadata| {
+                Ok(HandshakeComplete {
+                    peer_socket_type: metadata.socket_type()?,
                     metadata: metadata.clone(),
                 })
-        } else {
-            None
-        }
+            })
+            .transpose()
     }
 }

@@ -88,7 +88,10 @@ impl PubSocket {
     /// Panics when the publisher is not bound on TCP.
     #[must_use]
     pub fn local_addr(&self) -> SocketAddr {
-        self.local_addr.expect("publisher is not bound on TCP")
+        match self.local_addr {
+            Some(addr) => addr,
+            None => panic!("publisher is not bound on TCP"),
+        }
     }
 
     /// Waits for at least one subscriber to become ready.
@@ -376,7 +379,10 @@ impl RepSocket {
     /// Panics when the responder is not bound on TCP.
     #[must_use]
     pub fn local_addr(&self) -> SocketAddr {
-        self.local_addr.expect("responder is not bound on TCP")
+        match self.local_addr {
+            Some(addr) => addr,
+            None => panic!("responder is not bound on TCP"),
+        }
     }
 
     /// Receives the next inbound request body.
