@@ -76,6 +76,7 @@ impl Endpoint {
     }
 
     /// Returns the transport kind implied by the endpoint.
+    #[must_use]
     pub fn transport_kind(&self) -> TransportKind {
         match self {
             Self::Tcp(_) => TransportKind::Tcp,

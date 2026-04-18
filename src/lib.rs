@@ -403,11 +403,13 @@ impl MetadataMap {
     }
 
     /// Looks up a metadata value using an ASCII case-insensitive string key.
+    #[must_use]
     pub fn get(&self, name: &str) -> Option<&Bytes> {
         self.get_bytes(name.as_bytes())
     }
 
     /// Looks up a metadata value using an ASCII case-insensitive byte key.
+    #[must_use]
     pub fn get_bytes(&self, name: &[u8]) -> Option<&Bytes> {
         self.entries
             .iter()
@@ -422,11 +424,13 @@ impl MetadataMap {
     }
 
     /// Returns the number of stored entries.
+    #[must_use]
     pub fn len(&self) -> usize {
         self.entries.len()
     }
 
     /// Returns `true` when no metadata entries are stored.
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }

@@ -76,6 +76,7 @@ impl PubSocket {
     }
 
     /// Returns the bound endpoint.
+    #[must_use]
     pub fn endpoint(&self) -> &Endpoint {
         &self.endpoint
     }
@@ -85,6 +86,7 @@ impl PubSocket {
     /// # Panics
     ///
     /// Panics when the publisher is not bound on TCP.
+    #[must_use]
     pub fn local_addr(&self) -> SocketAddr {
         self.local_addr.expect("publisher is not bound on TCP")
     }
@@ -363,6 +365,7 @@ impl RepSocket {
     }
 
     /// Returns the bound endpoint.
+    #[must_use]
     pub fn endpoint(&self) -> &Endpoint {
         &self.endpoint
     }
@@ -372,6 +375,7 @@ impl RepSocket {
     /// # Panics
     ///
     /// Panics when the responder is not bound on TCP.
+    #[must_use]
     pub fn local_addr(&self) -> SocketAddr {
         self.local_addr.expect("responder is not bound on TCP")
     }
