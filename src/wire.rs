@@ -74,14 +74,14 @@ impl InputBuffer {
 
         self.len -= len;
 
-        if let Some(front) = self.chunks.front_mut() {
-            if front.len() >= len {
-                let bytes = front.split_to(len);
-                if front.is_empty() {
-                    self.chunks.pop_front();
-                }
-                return Some(bytes);
+        if let Some(front) = self.chunks.front_mut()
+            && front.len() >= len
+        {
+            let bytes = front.split_to(len);
+            if front.is_empty() {
+                self.chunks.pop_front();
             }
+            return Some(bytes);
         }
 
         let mut remaining = len;
@@ -89,10 +89,9 @@ impl InputBuffer {
         let mut out = BytesMut::with_capacity(len);
 
         while remaining > 0 {
-            let mut front = self
-                .chunks
-                .pop_front()
-                .expect("buffer length was prevalidated");
+            let Some(mut front) = self.chunks.pop_front() else {
+                unreachable!("buffer length was prevalidated");
+            };
             if front.len() <= remaining {
                 remaining -= front.len();
                 out.extend_from_slice(&front);
@@ -190,7 +189,9 @@ pub(crate) fn try_decode_frame(input: &mut InputBuffer) -> Result<Option<Frame>,
         return Ok(None);
     }
 
-    let flags_raw = input.peek_byte(0).expect("remaining was checked");
+    let Some(flags_raw) = input.peek_byte(0) else {
+        unreachable!("remaining was checked");
+    };
     if flags_raw & !FrameFlags::all().bits() != 0 {
         return Err(ProtocolError::InvalidFrameFlags(flags_raw));
     }
@@ -213,24 +214,31 @@ pub(crate) fn try_decode_frame(input: &mut InputBuffer) -> Result<Option<Frame>,
     }
 
     let size = if flags.contains(FrameFlags::LONG) {
-        let raw = input.peek_array::<8>(1).expect("length was prevalidated");
+        let Some(raw) = input.peek_array::<8>(1) else {
+            unreachable!("length was prevalidated");
+        };
         let size = u64::from_be_bytes(raw);
         if size & (1_u64 << 63) != 0 {
             return Err(ProtocolError::NegativeFrameLength);
         }
         usize::try_from(size).map_err(|_| ProtocolError::FrameTooLarge(size))?
     } else {
-        input.peek_byte(1).expect("length was prevalidated") as usize
+        let Some(size) = input.peek_byte(1) else {
+            unreachable!("length was prevalidated");
+        };
+        size as usize
     };
 
     if input.remaining() < 1 + size_len + size {
         return Ok(None);
     }
 
-    let _ = input
-        .take_exact(1 + size_len)
-        .expect("frame header is available");
-    let body = input.take_exact(size).expect("frame body is available");
+    let Some(_) = input.take_exact(1 + size_len) else {
+        unreachable!("frame header is available");
+    };
+    let Some(body) = input.take_exact(size) else {
+        unreachable!("frame body is available");
+    };
 
     Ok(Some(Frame { flags, body }))
 }
@@ -377,10 +385,14 @@ pub(crate) fn decode_metadata(bytes: Bytes) -> Result<MetadataMap, ProtocolError
         bytes.advance(1);
         let name = bytes.split_to(name_len);
 
-        let value_len = u32::from_be_bytes(bytes[..4].try_into().expect("slice length is fixed"));
+        let raw_len: [u8; 4] = bytes[..4]
+            .try_into()
+            .map_err(|_| ProtocolError::InvalidCommandFrame)?;
+        let value_len = u32::from_be_bytes(raw_len);
         bytes.advance(4);
 
-        let value_len = usize::try_from(value_len).expect("u32 fits in usize on supported targets");
+        let value_len = usize::try_from(value_len)
+            .map_err(|_| ProtocolError::FrameTooLarge(u64::from(value_len)))?;
         if value_len > MAX_METADATA_VALUE_LEN || bytes.len() < value_len {
             return Err(ProtocolError::InvalidCommandFrame);
         }
