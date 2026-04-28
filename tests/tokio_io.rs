@@ -289,6 +289,46 @@ async fn push_pull_roundtrip_over_tcp() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn push_socket_rejects_empty_messages_over_tcp() {
+    let puller = ok(PullSocket::bind("127.0.0.1:0").await);
+    let endpoint = puller.local_addr().to_string();
+    let pusher = ok(PushSocket::connect(&endpoint).await);
+
+    let err = match pusher.send(Vec::new()).await {
+        Ok(()) => panic!("expected Err(..), got Ok(..)"),
+        Err(err) => err,
+    };
+    assert!(matches!(
+        err,
+        TokioCelerityError::Protocol(ProtocolError::EmptyMessage)
+    ));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn pull_socket_accepts_messages_from_multiple_pushers() {
+    let mut puller = ok(PullSocket::bind("127.0.0.1:0").await);
+    let endpoint = puller.local_addr().to_string();
+    let first = ok(PushSocket::connect(&endpoint).await);
+    let second = ok(PushSocket::connect(&endpoint).await);
+
+    ok(first.send(vec![Bytes::from_static(b"one")]).await);
+    ok(second.send(vec![Bytes::from_static(b"two")]).await);
+
+    let first_message = ok(ok(timeout(Duration::from_secs(1), puller.recv()).await));
+    let second_message = ok(ok(timeout(Duration::from_secs(1), puller.recv()).await));
+
+    let mut received = vec![first_message, second_message];
+    received.sort();
+    assert_eq!(
+        received,
+        vec![
+            vec![Bytes::from_static(b"one")],
+            vec![Bytes::from_static(b"two")],
+        ]
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn req_rep_roundtrip_over_tcp() {
     let mut responder = ok(RepSocket::bind("127.0.0.1:0").await);
     let endpoint = responder.local_addr().to_string();
