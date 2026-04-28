@@ -8,13 +8,14 @@ use tokio::sync::{mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
 
 use crate::{
-    HwmConfig, LinkScope, LocalAuthPolicy, Multipart, PatternAction, PeerConfig, PeerEvent,
-    PubCore, PullCore, PushCore, RepCore, ReqCore, SecurityConfig, SecurityRole, SocketType,
+    HwmConfig, LinkScope, LocalAuthPolicy, Multipart, OutboundItem, PatternAction, PeerConfig,
+    PeerEvent, PubCore, PullCore, RepCore, ReqCore, SecurityConfig, SecurityRole, SocketType,
     SubCore,
 };
 
 use super::runtime::{
-    ConnectionHandle, TokioCelerity, send_runtime_command, try_send_runtime_command,
+    ConnectionHandle, TokioCelerity, flush_runtime_command, send_runtime_command,
+    try_send_runtime_command_sync,
 };
 use super::transport::{AnyListener, bind_any_listener, connect_any_stream};
 use super::{
@@ -264,7 +265,7 @@ impl SubSocket {
 /// A convenience wrapper for PUSH semantics over Tokio transports.
 #[derive(Debug)]
 pub struct PushSocket {
-    command_tx: mpsc::Sender<PushCommand>,
+    connection: ConnectionHandle,
     task: JoinHandle<Result<(), TokioCelerityError>>,
 }
 
@@ -280,11 +281,13 @@ impl PushSocket {
             connect_any_stream(&endpoint, LocalAuthPolicy::FilesystemStrict).await?;
         let config = PeerConfig::new(SocketType::Push, SecurityRole::Client, transport.link_scope);
         let connection = TokioCelerity::from_stream(stream, transport, config)?;
-        let (command_tx, command_rx) =
-            mpsc::channel(capacity_from_hwm(HwmConfig::default().outbound_messages));
-        let task = tokio::spawn(async move { run_push_socket(connection, command_rx).await });
+        let (connection, mut event_rx, task) = connection.into_parts();
+        let task = tokio::spawn(async move {
+            while event_rx.recv().await.is_some() {}
+            task.await?
+        });
 
-        Ok(Self { command_tx, task })
+        Ok(Self { connection, task })
     }
 
     /// Sends a message to the connected pull peer.
@@ -293,14 +296,21 @@ impl PushSocket {
     ///
     /// Returns a runtime or protocol error if the send cannot be processed.
     pub async fn send(&self, message: Multipart) -> Result<(), TokioCelerityError> {
-        let (reply_tx, reply_rx) = oneshot::channel();
-        self.command_tx
-            .send(PushCommand::Send(message, reply_tx))
-            .await
-            .map_err(|_| TokioCelerityError::ChannelClosed("push command channel"))?;
-        reply_rx
-            .await
-            .map_err(|_| TokioCelerityError::ChannelClosed("push command response channel"))?
+        send_runtime_command(
+            &self.connection.command_tx,
+            &self.connection.terminal_rx,
+            OutboundItem::Message(message),
+        )
+        .await
+    }
+
+    /// Waits until all previously queued outbound messages have been handed to the transport.
+    ///
+    /// # Errors
+    ///
+    /// Returns a runtime error if the background task ends before the flush completes.
+    pub async fn flush(&self) -> Result<(), TokioCelerityError> {
+        flush_runtime_command(&self.connection.command_tx, &self.connection.terminal_rx).await
     }
 
     /// Waits for the pusher task to finish.
@@ -598,11 +608,6 @@ enum SubCommand {
 }
 
 #[derive(Debug)]
-enum PushCommand {
-    Send(Multipart, oneshot::Sender<Result<(), TokioCelerityError>>),
-}
-
-#[derive(Debug)]
 enum PullCommand {}
 
 #[derive(Debug)]
@@ -690,7 +695,9 @@ async fn dispatch_pub_message(
             && let Some(handle) = peers.get(&peer)
         {
             // PUB fanout is best-effort; a full peer queue does not stall everyone else.
-            match try_send_runtime_command(&handle.command_tx, &handle.terminal_rx, item).await {
+            match try_send_runtime_command_sync(&handle.command_tx, &handle.terminal_rx, item)
+                .await
+            {
                 Ok(())
                 | Err(
                     TokioCelerityError::QueueFull
@@ -852,48 +859,6 @@ async fn drive_req_queue(
     }
 
     Ok(())
-}
-
-async fn run_push_socket(
-    mut connection: TokioCelerity,
-    mut command_rx: mpsc::Receiver<PushCommand>,
-) -> Result<(), TokioCelerityError> {
-    let peer = 0_u64;
-    let mut push_core = PushCore::new();
-    push_core.add_peer(peer);
-
-    let result = loop {
-        tokio::select! {
-            command = command_rx.recv() => {
-                match command {
-                    Some(PushCommand::Send(message, reply_tx)) => {
-                        let result = async {
-                            match push_core.send(message)? {
-                                PatternAction::Send { item, .. } => connection.send(item).await,
-                                PatternAction::Deliver { .. } => Ok(()),
-                            }
-                        }.await;
-                        let _ = reply_tx.send(result);
-                    }
-                    None => break Ok(()),
-                }
-            }
-            event = connection.recv() => {
-                match event {
-                    Some(_) => {}
-                    None => break connection.join().await,
-                }
-            }
-        }
-    };
-
-    if let Err(err) = &result {
-        while let Ok(PushCommand::Send(_, reply_tx)) = command_rx.try_recv() {
-            let _ = reply_tx.send(Err(background_error(err)));
-        }
-    }
-
-    result
 }
 
 async fn run_pull_socket(

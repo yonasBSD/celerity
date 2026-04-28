@@ -10,9 +10,10 @@ use celerity::io::{
     TokioCelerityError, TransportKind, TransportMeta,
 };
 #[cfg(feature = "curve")]
-use celerity::{CurveConfig, ProtocolError, SecurityConfig};
+use celerity::{CurveConfig, SecurityConfig};
 use celerity::{
-    HwmConfig, HwmPolicy, LinkScope, OutboundItem, PeerConfig, PeerEvent, SecurityRole, SocketType,
+    HwmConfig, HwmPolicy, LinkScope, OutboundItem, PeerConfig, PeerEvent, ProtocolError,
+    SecurityRole, SocketType,
 };
 use tokio::net::TcpListener;
 use tokio::time::timeout;

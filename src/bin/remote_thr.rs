@@ -47,6 +47,8 @@ async fn run() -> Result<(), String> {
             .map_err(|err| err.to_string())?;
     }
 
+    socket.flush().await.map_err(|err| err.to_string())?;
+
     Ok(())
 }
 
