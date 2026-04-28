@@ -2,6 +2,7 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::hash::Hash;
+use std::marker::PhantomData;
 
 use bytes::Bytes;
 
@@ -236,6 +237,118 @@ where
                         .any(|topic| topic.is_empty() || message[0].starts_with(topic))
                 {
                     return Ok(Vec::new());
+                }
+
+                Ok(vec![PatternAction::Deliver { peer, message }])
+            }
+            PeerEvent::HandshakeComplete { .. } | PeerEvent::Subscription { .. } => Ok(Vec::new()),
+        }
+    }
+}
+
+/// Core state for PUSH socket behavior.
+#[derive(Debug, Clone)]
+pub struct PushCore<PeerId> {
+    // State machine states:
+    // - `peers.is_empty()`: no connected pull peers are available.
+    // - otherwise: the front peer is the next round-robin destination.
+    peers: VecDeque<PeerId>,
+}
+
+impl<PeerId> Default for PushCore<PeerId> {
+    fn default() -> Self {
+        Self {
+            peers: VecDeque::new(),
+        }
+    }
+}
+
+impl<PeerId> PushCore<PeerId>
+where
+    PeerId: Copy + Eq,
+{
+    #[must_use]
+    /// Creates an empty PUSH core.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Adds a peer to the round-robin send queue.
+    pub fn add_peer(&mut self, peer: PeerId) {
+        if !self.peers.contains(&peer) {
+            self.peers.push_back(peer);
+        }
+    }
+
+    /// Removes a peer from the send queue.
+    pub fn remove_peer(&mut self, peer: PeerId) {
+        self.peers.retain(|candidate| *candidate != peer);
+    }
+
+    /// Sends a message to the next available pull peer.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProtocolError::EmptyMessage`] when `message` has no frames or
+    /// [`ProtocolError::NoAvailablePeers`] when no peers are connected.
+    pub fn send(&mut self, message: Multipart) -> Result<PatternAction<PeerId>, ProtocolError> {
+        if message.is_empty() {
+            return Err(ProtocolError::EmptyMessage);
+        }
+
+        let peer = self
+            .peers
+            .pop_front()
+            .ok_or(ProtocolError::NoAvailablePeers)?;
+        self.peers.push_back(peer);
+
+        Ok(PatternAction::Send {
+            peer,
+            item: OutboundItem::Message(message),
+        })
+    }
+}
+
+/// Core state for PULL socket behavior.
+#[derive(Debug, Clone)]
+pub struct PullCore<PeerId> {
+    // PULL has no protocol state beyond the caller-supplied peer identifier.
+    marker: PhantomData<PeerId>,
+}
+
+impl<PeerId> Default for PullCore<PeerId> {
+    fn default() -> Self {
+        Self {
+            marker: PhantomData,
+        }
+    }
+}
+
+impl<PeerId> PullCore<PeerId>
+where
+    PeerId: Copy,
+{
+    #[must_use]
+    /// Creates an empty PULL core.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Handles inbound peer events for a PULL socket.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ProtocolError::EmptyMessage`] when an inbound message has no
+    /// frames.
+    pub fn on_peer_event(
+        &mut self,
+        peer: PeerId,
+        event: PeerEvent,
+    ) -> Result<Vec<PatternAction<PeerId>>, ProtocolError> {
+        match event {
+            PeerEvent::Message(message) => {
+                if message.is_empty() {
+                    return Err(ProtocolError::EmptyMessage);
                 }
 
                 Ok(vec![PatternAction::Deliver { peer, message }])
@@ -546,7 +659,7 @@ fn split_envelope(message: &Multipart) -> Result<(Multipart, Multipart), Protoco
 mod tests {
     use bytes::Bytes;
 
-    use super::{PatternAction, PubCore, RepCore, ReqCore, SubCore};
+    use super::{PatternAction, PubCore, PullCore, PushCore, RepCore, ReqCore, SubCore};
     use crate::{OutboundItem, PeerEvent, ProtocolError};
 
     fn ok<T, E: core::fmt::Debug>(result: Result<T, E>) -> T {
@@ -674,6 +787,97 @@ mod tests {
             err(core.cancel(&Bytes::from_static(b"alpha"))),
             ProtocolError::UnknownSubscription
         );
+    }
+
+    #[test]
+    fn pushcore_rejects_messages_without_any_peers() {
+        let mut core = PushCore::<u8>::new();
+
+        assert_eq!(
+            err(core.send(vec![Bytes::from_static(b"one")])),
+            ProtocolError::NoAvailablePeers
+        );
+    }
+
+    #[test]
+    fn pushcore_rejects_empty_messages() {
+        let mut core = PushCore::<u8>::new();
+        core.add_peer(1);
+
+        assert_eq!(err(core.send(Vec::new())), ProtocolError::EmptyMessage);
+    }
+
+    #[test]
+    fn pushcore_round_robins_across_peers() {
+        let mut core = PushCore::<u8>::new();
+        core.add_peer(1);
+        core.add_peer(2);
+
+        let first = ok(core.send(vec![Bytes::from_static(b"one")]));
+        let second = ok(core.send(vec![Bytes::from_static(b"two")]));
+
+        assert_eq!(
+            first,
+            PatternAction::Send {
+                peer: 1,
+                item: OutboundItem::Message(vec![Bytes::from_static(b"one")]),
+            }
+        );
+        assert_eq!(
+            second,
+            PatternAction::Send {
+                peer: 2,
+                item: OutboundItem::Message(vec![Bytes::from_static(b"two")]),
+            }
+        );
+    }
+
+    #[test]
+    fn pushcore_removing_a_peer_keeps_the_queue_consistent() {
+        let mut core = PushCore::<u8>::new();
+        core.add_peer(1);
+        core.add_peer(2);
+        core.remove_peer(1);
+
+        let sent = ok(core.send(vec![Bytes::from_static(b"only")]));
+
+        assert_eq!(
+            sent,
+            PatternAction::Send {
+                peer: 2,
+                item: OutboundItem::Message(vec![Bytes::from_static(b"only")]),
+            }
+        );
+    }
+
+    #[test]
+    fn pullcore_delivers_inbound_messages() {
+        let mut core = PullCore::<u8>::new();
+
+        let delivered =
+            ok(core.on_peer_event(4, PeerEvent::Message(vec![Bytes::from_static(b"payload")])));
+
+        assert_eq!(
+            delivered,
+            vec![PatternAction::Deliver {
+                peer: 4,
+                message: vec![Bytes::from_static(b"payload")],
+            }]
+        );
+    }
+
+    #[test]
+    fn pullcore_ignores_non_message_events() {
+        let mut core = PullCore::<u8>::new();
+
+        assert!(ok(core.on_peer_event(
+            4,
+            PeerEvent::HandshakeComplete {
+                peer_socket_type: crate::SocketType::Push,
+                metadata: crate::MetadataMap::new(),
+            },
+        ))
+        .is_empty());
     }
 
     #[test]
