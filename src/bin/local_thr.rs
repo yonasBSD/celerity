@@ -30,9 +30,18 @@ async fn run() -> Result<(), String> {
     let mut socket = PullSocket::bind(&endpoint)
         .await
         .map_err(|err| err.to_string())?;
-    let started = Instant::now();
 
-    for index in 0..message_count {
+    let first = socket.recv().await.map_err(|err| err.to_string())?;
+    let first_size: usize = first.iter().map(bytes::Bytes::len).sum();
+    if first_size != message_size {
+        return Err(format!(
+            "message 0 had {first_size} bytes, expected {message_size}",
+        ));
+    }
+
+    // Mirror libzmq's throughput tool: wait for one warmup message, then time the steady-state run.
+    let started = Instant::now();
+    for index in 1..message_count {
         let message = socket.recv().await.map_err(|err| err.to_string())?;
         let received_size: usize = message.iter().map(bytes::Bytes::len).sum();
         if received_size != message_size {

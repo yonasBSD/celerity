@@ -261,7 +261,7 @@ impl SubSocket {
     }
 }
 
-/// A convenience wrapper for REQ semantics over Tokio transports.
+/// A convenience wrapper for PUSH semantics over Tokio transports.
 #[derive(Debug)]
 pub struct PushSocket {
     command_tx: mpsc::Sender<PushCommand>,
@@ -903,6 +903,7 @@ async fn run_pull_socket(
 ) -> Result<(), TokioCelerityError> {
     let (update_tx, mut update_rx) = mpsc::unbounded_channel();
     let mut pull_core = PullCore::new();
+    // Keep accepted connections alive until they close so their forwarder tasks keep running.
     let mut peers = HashMap::new();
     let mut next_peer_id = 0_u64;
 
