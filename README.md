@@ -118,6 +118,30 @@ cargo run --all-features --bin cel-cat -- pub ipc:///tmp/celerity.sock hello fro
 cargo run --all-features --bin cel-cat -- pub 127.0.0.1:5555 hello there world
 ```
 
+## Throughput Benchmarks
+
+There are also small throughput helpers built around `PUSH/PULL`.
+
+Terminal 1:
+
+```bash
+cargo run --release --features tokio --bin local_thr -- tcp://127.0.0.1:5555 1024 100000
+```
+
+Terminal 2:
+
+```bash
+cargo run --release --features tokio --bin remote_thr -- tcp://127.0.0.1:5555 1024 100000
+```
+
+Start `local_thr` first, then launch `remote_thr` in another terminal.
+
+`local_thr` is the side that reports throughput. `remote_thr` just pushes the traffic, which keeps the measurement closer to libzmq's `local_thr` / `remote_thr` split.
+
+They are intentionally simple so it is easy to line them up with libzmq-style throughput runs.
+
+For repeatable benchmarking notes and a small runner script, see [`perf/README.md`](perf/README.md).
+
 ## Local, IPC, and Remote Use
 
 ### Loopback TCP

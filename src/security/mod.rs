@@ -36,7 +36,7 @@ pub(crate) trait MechanismDriver {
         output: &mut VecDeque<ProtocolAction>,
     ) -> Result<Option<HandshakeComplete>, ProtocolError>;
 
-    fn encode_outbound(&mut self, item: &OutboundItem) -> Result<Vec<Bytes>, ProtocolError>;
+    fn encode_outbound(&mut self, item: &OutboundItem) -> Result<Vec<ProtocolAction>, ProtocolError>;
 
     fn decode_message(&mut self, payload: Bytes) -> Result<Bytes, ProtocolError>;
 }
@@ -85,7 +85,7 @@ impl Mechanism {
     pub(crate) fn encode_outbound(
         &mut self,
         item: &OutboundItem,
-    ) -> Result<Vec<Bytes>, ProtocolError> {
+    ) -> Result<Vec<ProtocolAction>, ProtocolError> {
         match self {
             Self::Null(driver) => driver.encode_outbound(item),
             Self::Curve(driver) => driver.encode_outbound(item),

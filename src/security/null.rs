@@ -2,7 +2,9 @@ use std::collections::VecDeque;
 
 use bytes::Bytes;
 
-use crate::wire::{Command, decode_metadata, encode_outbound_item, encode_ready};
+use crate::wire::{
+    Command, decode_metadata, encode_command, encode_message_frame_actions, encode_ready,
+};
 use crate::{MetadataMap, OutboundItem, PeerConfig, ProtocolAction, ProtocolError, SecurityRole};
 
 use super::{HandshakeComplete, MechanismDriver, validate_remote_metadata};
@@ -62,8 +64,19 @@ impl MechanismDriver for NullMechanism {
         }
     }
 
-    fn encode_outbound(&mut self, item: &OutboundItem) -> Result<Vec<Bytes>, ProtocolError> {
-        encode_outbound_item(item)
+    fn encode_outbound(
+        &mut self,
+        item: &OutboundItem,
+    ) -> Result<Vec<ProtocolAction>, ProtocolError> {
+        match item {
+            OutboundItem::Message(message) => encode_message_frame_actions(message),
+            OutboundItem::Subscribe(topic) => Ok(vec![ProtocolAction::Write(encode_command(
+                Command::Subscribe(topic.clone()),
+            )?)]),
+            OutboundItem::Cancel(topic) => Ok(vec![ProtocolAction::Write(encode_command(
+                Command::Cancel(topic.clone()),
+            )?)]),
+        }
     }
 
     fn decode_message(&mut self, _payload: Bytes) -> Result<Bytes, ProtocolError> {

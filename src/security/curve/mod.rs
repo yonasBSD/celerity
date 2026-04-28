@@ -187,7 +187,10 @@ impl MechanismDriver for CurveMechanism {
         }
     }
 
-    fn encode_outbound(&mut self, item: &OutboundItem) -> Result<Vec<Bytes>, ProtocolError> {
+    fn encode_outbound(
+        &mut self,
+        item: &OutboundItem,
+    ) -> Result<Vec<ProtocolAction>, ProtocolError> {
         #[cfg(not(feature = "curve"))]
         {
             let _ = item;
@@ -200,7 +203,9 @@ impl MechanismDriver for CurveMechanism {
             let raw_frames = encode_outbound_item(item)?;
             let plaintext = encode_raw_frames(&raw_frames);
             let payload = seal_message(channel, &plaintext)?;
-            Ok(vec![encode_command(Command::Message(payload))?])
+            Ok(vec![ProtocolAction::Write(encode_command(Command::Message(
+                payload,
+            ))?)])
         }
     }
 

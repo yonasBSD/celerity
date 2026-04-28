@@ -20,6 +20,8 @@ use super::{
     TokioCelerityError, TransportKind, TransportMeta, capacity_from_hwm,
 };
 
+const MAX_COMMANDS_PER_TURN: usize = 64;
+
 #[derive(Debug, Clone)]
 pub(crate) enum DriverStatus {
     CleanShutdown,
@@ -28,7 +30,12 @@ pub(crate) enum DriverStatus {
 
 #[derive(Debug)]
 pub(crate) enum RuntimeCommand {
-    Submit(OutboundItem, oneshot::Sender<()>),
+    Submit(OutboundItem),
+    SubmitSync(
+        OutboundItem,
+        oneshot::Sender<Result<(), TokioCelerityError>>,
+    ),
+    Flush(oneshot::Sender<Result<(), TokioCelerityError>>),
 }
 
 #[derive(Debug)]
@@ -119,7 +126,7 @@ impl TokioCelerity {
     /// Returns an error if the background task has already ended or if the
     /// runtime rejects the item while processing it.
     pub async fn send(&self, item: OutboundItem) -> Result<(), TokioCelerityError> {
-        send_runtime_command(&self.command_tx, &self.terminal_rx, item).await
+        send_runtime_command_sync(&self.command_tx, &self.terminal_rx, item).await
     }
 
     /// Attempts to submit an outbound item without waiting for queue capacity.
@@ -129,7 +136,7 @@ impl TokioCelerity {
     /// Returns [`TokioCelerityError::QueueFull`] when the command queue is
     /// full, or another runtime error if the background task has ended.
     pub async fn try_send(&self, item: OutboundItem) -> Result<(), TokioCelerityError> {
-        try_send_runtime_command(&self.command_tx, &self.terminal_rx, item).await
+        try_send_runtime_command_sync(&self.command_tx, &self.terminal_rx, item).await
     }
 
     /// Waits for the next peer event from the background task.
@@ -176,6 +183,7 @@ async fn run_tokio_peer(
     let mut read_buf = BytesMut::with_capacity(READ_BUFFER_CAPACITY);
     let mut pending: VecDeque<QueuedOutbound> = VecDeque::new();
     let mut pending_bytes = 0_usize;
+    let mut pending_flushes: Vec<oneshot::Sender<Result<(), TokioCelerityError>>> = Vec::new();
     // Application sends queue here until the handshake opens the traffic phase.
     let mut ready_for_traffic = false;
     let mut needs_drain = true;
@@ -207,6 +215,12 @@ async fn run_tokio_peer(
                     needs_drain = true;
                     tokio::task::yield_now().await;
                 }
+
+                if ready_for_traffic && pending.is_empty() && !needs_drain {
+                    for ack in pending_flushes.drain(..) {
+                        let _ = ack.send(Ok(()));
+                    }
+                }
             }
 
             read = stream.read_buf(&mut read_buf), if should_read(hwm, &read_buf) => {
@@ -222,21 +236,33 @@ async fn run_tokio_peer(
 
             command = command_rx.recv(), if ready_for_traffic || can_take_command(hwm, pending.len(), pending_bytes) => {
                 match command {
-                    Some(RuntimeCommand::Submit(item, ack)) => {
-                        if ready_for_traffic {
-                            peer.submit(&item)?;
-                            let _ = ack.send(());
-                            needs_drain = true;
-                        } else if queue_has_headroom(hwm, pending.len(), pending_bytes) {
-                            // Before READY, we queue locally instead of touching the peer state.
-                            let bytes = outbound_item_bytes(&item);
-                            pending_bytes = pending_bytes.saturating_add(bytes);
-                            pending.push_back(QueuedOutbound { item, bytes });
-                            let _ = ack.send(());
-                        } else if hwm.policy == HwmPolicy::DropNewest {
-                            let _ = ack.send(());
-                        } else {
-                            return Err(TokioCelerityError::QueueFull);
+                    Some(command) => {
+                        handle_runtime_command(
+                            &mut peer,
+                            hwm,
+                            &mut pending,
+                            &mut pending_bytes,
+                            &mut pending_flushes,
+                            ready_for_traffic,
+                            &mut needs_drain,
+                            command,
+                        )?;
+
+                        for _ in 1..MAX_COMMANDS_PER_TURN {
+                            let Ok(command) = command_rx.try_recv() else {
+                                break;
+                            };
+
+                            handle_runtime_command(
+                                &mut peer,
+                                hwm,
+                                &mut pending,
+                                &mut pending_bytes,
+                                &mut pending_flushes,
+                                ready_for_traffic,
+                                &mut needs_drain,
+                                command,
+                            )?;
                         }
                     }
                     None => return Ok(()),
@@ -257,6 +283,71 @@ fn queue_has_headroom(hwm: HwmConfig, pending_messages: usize, pending_bytes: us
 
 fn can_take_command(hwm: HwmConfig, pending_messages: usize, pending_bytes: usize) -> bool {
     hwm.policy == HwmPolicy::DropNewest || queue_has_headroom(hwm, pending_messages, pending_bytes)
+}
+
+fn submit_runtime_item(
+    peer: &mut CelerityPeer,
+    hwm: HwmConfig,
+    pending: &mut VecDeque<QueuedOutbound>,
+    pending_bytes: &mut usize,
+    ready_for_traffic: bool,
+    needs_drain: &mut bool,
+    item: OutboundItem,
+) -> Result<(), TokioCelerityError> {
+    if ready_for_traffic {
+        peer.submit(&item)?;
+        *needs_drain = true;
+    } else if queue_has_headroom(hwm, pending.len(), *pending_bytes) {
+        // Before READY, we queue locally instead of touching the peer state.
+        let bytes = outbound_item_bytes(&item);
+        *pending_bytes = pending_bytes.saturating_add(bytes);
+        pending.push_back(QueuedOutbound { item, bytes });
+    } else if hwm.policy != HwmPolicy::DropNewest {
+        return Err(TokioCelerityError::QueueFull);
+    }
+
+    Ok(())
+}
+
+fn handle_runtime_command(
+    peer: &mut CelerityPeer,
+    hwm: HwmConfig,
+    pending: &mut VecDeque<QueuedOutbound>,
+    pending_bytes: &mut usize,
+    pending_flushes: &mut Vec<oneshot::Sender<Result<(), TokioCelerityError>>>,
+    ready_for_traffic: bool,
+    needs_drain: &mut bool,
+    command: RuntimeCommand,
+) -> Result<(), TokioCelerityError> {
+    match command {
+        RuntimeCommand::Submit(item) => submit_runtime_item(
+            peer,
+            hwm,
+            pending,
+            pending_bytes,
+            ready_for_traffic,
+            needs_drain,
+            item,
+        ),
+        RuntimeCommand::SubmitSync(item, ack) => {
+            let result = submit_runtime_item(
+                peer,
+                hwm,
+                pending,
+                pending_bytes,
+                ready_for_traffic,
+                needs_drain,
+                item,
+            );
+            let _ = ack.send(result);
+            Ok(())
+        }
+        RuntimeCommand::Flush(ack) => {
+            pending_flushes.push(ack);
+            *needs_drain = true;
+            Ok(())
+        }
+    }
 }
 
 async fn pump_peer_actions(
@@ -282,6 +373,11 @@ async fn pump_peer_actions(
             ProtocolAction::Write(bytes) => {
                 written_bytes = written_bytes.saturating_add(bytes.len());
                 writes.push(bytes);
+            }
+            ProtocolAction::WriteVectored { header, body } => {
+                written_bytes = written_bytes.saturating_add(header.len() + body.len());
+                writes.push(header);
+                writes.push(body);
             }
             ProtocolAction::Event(event) => {
                 // Flush pending bytes before surfacing events across an await boundary.
@@ -358,27 +454,40 @@ pub(crate) async fn send_runtime_command(
     terminal_rx: &watch::Receiver<Option<DriverStatus>>,
     item: OutboundItem,
 ) -> Result<(), TokioCelerityError> {
+    validate_runtime_item(&item)?;
+    command_tx
+        .send(RuntimeCommand::Submit(item))
+        .await
+        .map_err(|_| terminal_error(terminal_rx.borrow().as_ref()))?;
+    Ok(())
+}
+
+pub(crate) async fn send_runtime_command_sync(
+    command_tx: &mpsc::Sender<RuntimeCommand>,
+    terminal_rx: &watch::Receiver<Option<DriverStatus>>,
+    item: OutboundItem,
+) -> Result<(), TokioCelerityError> {
+    validate_runtime_item(&item)?;
     let (reply_tx, reply_rx) = oneshot::channel();
     command_tx
-        .send(RuntimeCommand::Submit(item, reply_tx))
+        .send(RuntimeCommand::SubmitSync(item, reply_tx))
         .await
         .map_err(|_| terminal_error(terminal_rx.borrow().as_ref()))?;
 
     reply_rx
         .await
-        .map_err(|_| terminal_error(terminal_rx.borrow().as_ref()))?;
-
-    Ok(())
+        .map_err(|_| terminal_error(terminal_rx.borrow().as_ref()))?
 }
 
-pub(crate) async fn try_send_runtime_command(
+pub(crate) async fn try_send_runtime_command_sync(
     command_tx: &mpsc::Sender<RuntimeCommand>,
     terminal_rx: &watch::Receiver<Option<DriverStatus>>,
     item: OutboundItem,
 ) -> Result<(), TokioCelerityError> {
+    validate_runtime_item(&item)?;
     let (reply_tx, reply_rx) = oneshot::channel();
     command_tx
-        .try_send(RuntimeCommand::Submit(item, reply_tx))
+        .try_send(RuntimeCommand::SubmitSync(item, reply_tx))
         .map_err(|err| match err {
             mpsc::error::TrySendError::Full(_) => TokioCelerityError::QueueFull,
             mpsc::error::TrySendError::Closed(_) => terminal_error(terminal_rx.borrow().as_ref()),
@@ -386,7 +495,29 @@ pub(crate) async fn try_send_runtime_command(
 
     reply_rx
         .await
+        .map_err(|_| terminal_error(terminal_rx.borrow().as_ref()))?
+}
+
+pub(crate) async fn flush_runtime_command(
+    command_tx: &mpsc::Sender<RuntimeCommand>,
+    terminal_rx: &watch::Receiver<Option<DriverStatus>>,
+) -> Result<(), TokioCelerityError> {
+    let (reply_tx, reply_rx) = oneshot::channel();
+    command_tx
+        .send(RuntimeCommand::Flush(reply_tx))
+        .await
         .map_err(|_| terminal_error(terminal_rx.borrow().as_ref()))?;
+
+    reply_rx
+        .await
+        .map_err(|_| terminal_error(terminal_rx.borrow().as_ref()))?
+}
+
+fn validate_runtime_item(item: &OutboundItem) -> Result<(), TokioCelerityError> {
+    if matches!(item, OutboundItem::Message(message) if message.is_empty()) {
+        return Err(crate::ProtocolError::EmptyMessage.into());
+    }
+
     Ok(())
 }
 
