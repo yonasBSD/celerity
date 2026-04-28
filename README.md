@@ -142,7 +142,7 @@ Add the crate with the feature set you need:
 
 ```toml
 [dependencies]
-celerity = { version = "0.1.1", features = ["tokio", "ipc", "curve"] }
+celerity = { version = "0.2.0", features = ["tokio", "ipc", "curve"] }
 ```
 
 At the core is `CelerityPeer`, which owns protocol state but no sockets. The Tokio wrappers in `celerity::io` sit on top when you want real network transport.

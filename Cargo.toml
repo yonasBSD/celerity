@@ -1,6 +1,6 @@
 [package]
 name = "celerity"
-version = "0.1.1"
+version = "0.2.0"
 edition = "2024"
 authors = ["shemtorga@gmail.com", "okechshem75@gmail.com"]
 description = "Pure Rust sans-IO ZMTP 3.1 messaging core with Tokio TCP and Unix socket transports."
