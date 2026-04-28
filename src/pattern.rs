@@ -249,9 +249,7 @@ where
 /// Core state for PUSH socket behavior.
 #[derive(Debug, Clone)]
 pub struct PushCore<PeerId> {
-    // State machine states:
-    // - `peers.is_empty()`: no connected pull peers are available.
-    // - otherwise: the front peer is the next round-robin destination.
+    // Empty means there is nowhere to send. Otherwise, the front peer gets the next message.
     peers: VecDeque<PeerId>,
 }
 
@@ -312,7 +310,7 @@ where
 /// Core state for PULL socket behavior.
 #[derive(Debug, Clone)]
 pub struct PullCore<PeerId> {
-    // PULL has no protocol state beyond the caller-supplied peer identifier.
+    // PULL does not need pattern state; it only turns inbound peer events into deliveries.
     marker: PhantomData<PeerId>,
 }
 
@@ -833,6 +831,32 @@ mod tests {
     }
 
     #[test]
+    fn pushcore_ignores_duplicate_peers() {
+        let mut core = PushCore::<u8>::new();
+        core.add_peer(1);
+        core.add_peer(1);
+        core.add_peer(2);
+
+        let first = ok(core.send(vec![Bytes::from_static(b"one")]));
+        let second = ok(core.send(vec![Bytes::from_static(b"two")]));
+
+        assert_eq!(
+            first,
+            PatternAction::Send {
+                peer: 1,
+                item: OutboundItem::Message(vec![Bytes::from_static(b"one")]),
+            }
+        );
+        assert_eq!(
+            second,
+            PatternAction::Send {
+                peer: 2,
+                item: OutboundItem::Message(vec![Bytes::from_static(b"two")]),
+            }
+        );
+    }
+
+    #[test]
     fn pushcore_removing_a_peer_keeps_the_queue_consistent() {
         let mut core = PushCore::<u8>::new();
         core.add_peer(1);
@@ -863,6 +887,16 @@ mod tests {
                 peer: 4,
                 message: vec![Bytes::from_static(b"payload")],
             }]
+        );
+    }
+
+    #[test]
+    fn pullcore_rejects_empty_messages() {
+        let mut core = PullCore::<u8>::new();
+
+        assert_eq!(
+            err(core.on_peer_event(4, PeerEvent::Message(Vec::new()))),
+            ProtocolError::EmptyMessage
         );
     }
 
