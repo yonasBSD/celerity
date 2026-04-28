@@ -4,6 +4,8 @@ This directory is for repeatable benchmark workflow around Celerity.
 
 The benchmark binaries themselves stay in `src/bin/` so Cargo can build and run them normally:
 
+- `local_lat`
+- `remote_lat`
 - `local_thr`
 - `remote_thr`
 
@@ -15,6 +17,11 @@ For throughput, the intended comparison is:
 
 - Celerity `local_thr` / `remote_thr`
 - libzmq `local_thr` / `remote_thr`
+
+For latency, the intended comparison is:
+
+- Celerity `local_lat` / `remote_lat`
+- libzmq `local_lat` / `remote_lat`
 
 Run the receiver first, then the sender.
 
@@ -47,6 +54,22 @@ cargo run --release --features tokio --bin remote_thr -- tcp://127.0.0.1:5555 10
 
 `local_thr` is the side that reports the benchmark result. `remote_thr` just pushes the traffic.
 
+## Celerity Latency
+
+Terminal 1:
+
+```bash
+cargo run --release --features tokio --bin local_lat -- tcp://127.0.0.1:5555 1024 100000
+```
+
+Terminal 2:
+
+```bash
+cargo run --release --features tokio --bin remote_lat -- tcp://127.0.0.1:5555 1024 100000
+```
+
+`remote_lat` is the side that reports the benchmark result. It performs one warmup round trip and then times the remaining request/reply loop.
+
 ## libzmq Throughput
 
 Terminal 1:
@@ -69,6 +92,7 @@ Terminal 2:
 - Run each case at least 3 times.
 - Compare median-to-median or best-of-3 to best-of-3, but stay consistent.
 - Record the receiver-side throughput, not the sender-side timing.
+- Record latency from the requester side, not the responder side.
 
 ## Result Template
 
@@ -86,3 +110,9 @@ There is a helper script in this directory:
 ```
 
 It runs the Celerity throughput pair for the default size grid and prints a compact summary.
+
+There is also a latency runner:
+
+```bash
+./perf/run_lat.sh
+```

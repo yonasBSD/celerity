@@ -77,3 +77,13 @@ required-features = ["tokio"]
 name = "remote_thr"
 path = "src/bin/remote_thr.rs"
 required-features = ["tokio"]
+
+[[bin]]
+name = "local_lat"
+path = "src/bin/local_lat.rs"
+required-features = ["tokio"]
+
+[[bin]]
+name = "remote_lat"
+path = "src/bin/remote_lat.rs"
+required-features = ["tokio"]
