@@ -26,6 +26,10 @@ pub enum SocketType {
     Pub,
     /// A subscriber that receives messages from publishers.
     Sub,
+    /// A pipeline sender that load-balances messages across pullers.
+    Push,
+    /// A pipeline receiver that consumes messages from pushers.
+    Pull,
     /// A requester that sends one request at a time and waits for a reply.
     Req,
     /// A responder that receives requests and sends replies.
@@ -37,6 +41,8 @@ impl SocketType {
         match self {
             Self::Pub => "PUB",
             Self::Sub => "SUB",
+            Self::Push => "PUSH",
+            Self::Pull => "PULL",
             Self::Req => "REQ",
             Self::Rep => "REP",
         }
@@ -46,6 +52,8 @@ impl SocketType {
         match value {
             b"PUB" => Ok(Self::Pub),
             b"SUB" => Ok(Self::Sub),
+            b"PUSH" => Ok(Self::Push),
+            b"PULL" => Ok(Self::Pull),
             b"REQ" => Ok(Self::Req),
             b"REP" => Ok(Self::Rep),
             _ => Err(ProtocolError::InvalidSocketType(Bytes::copy_from_slice(
@@ -59,6 +67,8 @@ impl SocketType {
             (self, remote),
             (Self::Pub, Self::Sub)
                 | (Self::Sub, Self::Pub)
+                | (Self::Push, Self::Pull)
+                | (Self::Pull, Self::Push)
                 | (Self::Req, Self::Rep)
                 | (Self::Rep, Self::Req)
         )
@@ -815,6 +825,16 @@ mod tests {
             err(metadata.socket_type()),
             ProtocolError::InvalidSocketType(Bytes::from_static(b"PAIR"))
         );
+    }
+
+    #[test]
+    fn socket_type_parses_and_matches_push_pull() {
+        assert_eq!(ok(SocketType::from_bytes(b"PUSH")), SocketType::Push);
+        assert_eq!(ok(SocketType::from_bytes(b"PULL")), SocketType::Pull);
+        assert!(SocketType::Push.is_compatible_with(SocketType::Pull));
+        assert!(SocketType::Pull.is_compatible_with(SocketType::Push));
+        assert!(!SocketType::Push.is_compatible_with(SocketType::Push));
+        assert!(!SocketType::Pull.is_compatible_with(SocketType::Pull));
     }
 
     #[test]
