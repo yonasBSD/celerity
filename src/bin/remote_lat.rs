@@ -1,16 +1,13 @@
 //! Latency requester similar to libzmq's local/remote latency tools.
 
-#[path = "support/perf_common.rs"]
-mod perf_common;
+mod common;
 
 use std::process::ExitCode;
 use std::time::Instant;
 
 use bytes::Bytes;
 use celerity::io::{ReqSocket, TokioCelerityError};
-use perf_common::{
-    CONNECT_RETRY_DELAY, format_elapsed, format_hundredths, parse_positive_usize, usage,
-};
+use common::{CONNECT_RETRY_DELAY, format_elapsed, format_hundredths, parse_positive_usize, usage};
 
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> ExitCode {

@@ -1,13 +1,12 @@
 //! Latency responder similar to libzmq's local/remote latency tools.
 
-#[path = "support/perf_common.rs"]
-mod perf_common;
+mod common;
 
 use std::process::ExitCode;
 
 use bytes::Bytes;
 use celerity::io::RepSocket;
-use perf_common::{parse_positive_usize, usage};
+use common::{parse_positive_usize, usage};
 
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> ExitCode {

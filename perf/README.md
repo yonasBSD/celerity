@@ -96,10 +96,19 @@ Terminal 2:
 
 ## Result Template
 
+### Throughput
+
 | implementation | transport | size (bytes) | count | msg/s | MiB/s | notes |
 | --- | --- | ---: | ---: | ---: | ---: | --- |
 | celerity | tcp loopback | 1024 | 100000 | | | |
 | libzmq | tcp loopback | 1024 | 100000 | | | |
+
+### Latency
+
+| implementation | transport | size (bytes) | round trips | avg latency (us) | notes |
+| --- | --- | ---: | ---: | ---: | --- |
+| celerity | tcp loopback | 1024 | 100000 | | |
+| libzmq | tcp loopback | 1024 | 100000 | | |
 
 ## Automation
 

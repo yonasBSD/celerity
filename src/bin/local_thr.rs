@@ -1,13 +1,12 @@
 //! Throughput receiver similar to libzmq's local/remote throughput tools.
 
-#[path = "support/perf_common.rs"]
-mod perf_common;
+mod common;
 
 use std::process::ExitCode;
 use std::time::Instant;
 
 use celerity::io::PullSocket;
-use perf_common::{format_elapsed, format_hundredths, parse_positive_usize, usage};
+use common::{format_elapsed, format_hundredths, parse_positive_usize, usage};
 
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> ExitCode {
