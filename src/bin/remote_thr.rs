@@ -33,21 +33,27 @@ async fn run() -> Result<(), String> {
 
     let socket = connect_pusher(&endpoint).await?;
     let payload = Bytes::from(vec![0_u8; message_size]);
+    let flush_every = flush_interval(message_size);
 
     // One warmup message lets the receiver start timing after the pipe is hot.
     socket
         .send(vec![payload.clone()])
         .await
         .map_err(|err| err.to_string())?;
+    flush_sender(&socket).await?;
 
-    for _ in 0..message_count {
+    for index in 0..message_count {
         socket
             .send(vec![payload.clone()])
             .await
             .map_err(|err| err.to_string())?;
+
+        if (index + 1) % flush_every == 0 {
+            flush_sender(&socket).await?;
+        }
     }
 
-    socket.flush().await.map_err(|err| err.to_string())?;
+    flush_sender(&socket).await?;
 
     Ok(())
 }
@@ -63,5 +69,23 @@ async fn connect_pusher(endpoint: &str) -> Result<PushSocket, String> {
             }
             Err(err) => return Err(err.to_string()),
         }
+    }
+}
+
+async fn flush_sender(socket: &PushSocket) -> Result<(), String> {
+    match socket.flush().await {
+        Ok(())
+        | Err(TokioCelerityError::BackgroundTaskEnded)
+        | Err(TokioCelerityError::ChannelClosed("connection task")) => Ok(()),
+        Err(err) => Err(err.to_string()),
+    }
+}
+
+fn flush_interval(message_size: usize) -> usize {
+    if message_size < (32 * 1024) {
+        usize::MAX
+    } else {
+        const TARGET_BATCH_BYTES: usize = 1 << 19;
+        (TARGET_BATCH_BYTES / message_size.max(1)).max(1)
     }
 }

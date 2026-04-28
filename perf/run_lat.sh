@@ -2,7 +2,7 @@
 set -euo pipefail
 
 endpoint="${ENDPOINT:-tcp://127.0.0.1:5555}"
-count="${COUNT:-100000}"
+count="${COUNT:-10000}"
 
 if (($# > 0)); then
   sizes=("$@")

@@ -4,7 +4,8 @@ use bitflags::bitflags;
 use bytes::{Buf, BufMut, Bytes, BytesMut};
 
 use crate::{
-    MetadataMap, OutboundItem, PeerConfig, ProtocolError, SecurityMechanism, SecurityRole,
+    MetadataMap, OutboundItem, PeerConfig, ProtocolAction, ProtocolError, SecurityMechanism,
+    SecurityRole,
 };
 
 pub(crate) const GREETING_SIZE: usize = 64;
@@ -243,6 +244,7 @@ pub(crate) fn try_decode_frame(input: &mut InputBuffer) -> Result<Option<Frame>,
     Ok(Some(Frame { flags, body }))
 }
 
+#[cfg_attr(not(feature = "curve"), allow(dead_code))]
 pub(crate) fn encode_outbound_item(item: &OutboundItem) -> Result<Vec<Bytes>, ProtocolError> {
     match item {
         OutboundItem::Message(message) => encode_message_frames(message),
@@ -303,6 +305,7 @@ pub(crate) fn decode_command(body: Bytes) -> Result<Command, ProtocolError> {
     }
 }
 
+#[cfg_attr(not(feature = "curve"), allow(dead_code))]
 pub(crate) fn encode_message_frames(message: &[Bytes]) -> Result<Vec<Bytes>, ProtocolError> {
     if message.is_empty() {
         return Err(ProtocolError::EmptyMessage);
@@ -316,6 +319,27 @@ pub(crate) fn encode_message_frames(message: &[Bytes]) -> Result<Vec<Bytes>, Pro
             flags |= FrameFlags::MORE;
         }
         out.push(encode_frame(flags, body));
+    }
+    Ok(out)
+}
+
+pub(crate) fn encode_message_frame_actions(
+    message: &[Bytes],
+) -> Result<Vec<ProtocolAction>, ProtocolError> {
+    if message.is_empty() {
+        return Err(ProtocolError::EmptyMessage);
+    }
+
+    let mut out = Vec::with_capacity(message.len());
+    for (index, body) in message.iter().enumerate() {
+        let mut flags = FrameFlags::empty();
+        if index + 1 != message.len() {
+            flags |= FrameFlags::MORE;
+        }
+        out.push(ProtocolAction::WriteVectored {
+            header: encode_frame_header(flags, body.len()),
+            body: body.clone(),
+        });
     }
     Ok(out)
 }
@@ -343,9 +367,16 @@ pub(crate) fn encode_raw_frames(frames: &[Bytes]) -> Bytes {
 }
 
 fn encode_frame(flags: FrameFlags, body: &[u8]) -> Bytes {
-    let body_len = body.len();
+    let header = encode_frame_header(flags, body.len());
+    let mut frame = BytesMut::with_capacity(header.len() + body.len());
+    frame.extend_from_slice(&header);
+    frame.extend_from_slice(body);
+    frame.freeze()
+}
+
+fn encode_frame_header(flags: FrameFlags, body_len: usize) -> Bytes {
     let long = body_len > u8::MAX as usize;
-    let mut header = BytesMut::with_capacity(1 + if long { 8 } else { 1 } + body_len);
+    let mut header = BytesMut::with_capacity(1 + if long { 8 } else { 1 });
     let mut flags = flags;
 
     if long {
@@ -360,7 +391,6 @@ fn encode_frame(flags: FrameFlags, body: &[u8]) -> Bytes {
         header.put_u8(body_len);
     }
 
-    header.extend_from_slice(body);
     header.freeze()
 }
 

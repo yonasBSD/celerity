@@ -126,7 +126,7 @@ impl TokioCelerity {
     /// Returns an error if the background task has already ended or if the
     /// runtime rejects the item while processing it.
     pub async fn send(&self, item: OutboundItem) -> Result<(), TokioCelerityError> {
-        send_runtime_command(&self.command_tx, &self.terminal_rx, item).await
+        send_runtime_command_sync(&self.command_tx, &self.terminal_rx, item).await
     }
 
     /// Attempts to submit an outbound item without waiting for queue capacity.
@@ -136,7 +136,7 @@ impl TokioCelerity {
     /// Returns [`TokioCelerityError::QueueFull`] when the command queue is
     /// full, or another runtime error if the background task has ended.
     pub async fn try_send(&self, item: OutboundItem) -> Result<(), TokioCelerityError> {
-        try_send_runtime_command(&self.command_tx, &self.terminal_rx, item).await
+        try_send_runtime_command_sync(&self.command_tx, &self.terminal_rx, item).await
     }
 
     /// Waits for the next peer event from the background task.
@@ -374,6 +374,11 @@ async fn pump_peer_actions(
                 written_bytes = written_bytes.saturating_add(bytes.len());
                 writes.push(bytes);
             }
+            ProtocolAction::WriteVectored { header, body } => {
+                written_bytes = written_bytes.saturating_add(header.len() + body.len());
+                writes.push(header);
+                writes.push(body);
+            }
             ProtocolAction::Event(event) => {
                 // Flush pending bytes before surfacing events across an await boundary.
                 if !writes.is_empty() {
@@ -457,19 +462,21 @@ pub(crate) async fn send_runtime_command(
     Ok(())
 }
 
-pub(crate) async fn try_send_runtime_command(
+pub(crate) async fn send_runtime_command_sync(
     command_tx: &mpsc::Sender<RuntimeCommand>,
     terminal_rx: &watch::Receiver<Option<DriverStatus>>,
     item: OutboundItem,
 ) -> Result<(), TokioCelerityError> {
     validate_runtime_item(&item)?;
+    let (reply_tx, reply_rx) = oneshot::channel();
     command_tx
-        .try_send(RuntimeCommand::Submit(item))
-        .map_err(|err| match err {
-            mpsc::error::TrySendError::Full(_) => TokioCelerityError::QueueFull,
-            mpsc::error::TrySendError::Closed(_) => terminal_error(terminal_rx.borrow().as_ref()),
-        })?;
-    Ok(())
+        .send(RuntimeCommand::SubmitSync(item, reply_tx))
+        .await
+        .map_err(|_| terminal_error(terminal_rx.borrow().as_ref()))?;
+
+    reply_rx
+        .await
+        .map_err(|_| terminal_error(terminal_rx.borrow().as_ref()))?
 }
 
 pub(crate) async fn try_send_runtime_command_sync(

@@ -17,8 +17,8 @@ pub use transport::AnyStream;
 
 pub(crate) const DEFAULT_CHANNEL_CAPACITY: usize = 1;
 pub(crate) const READ_BUFFER_CAPACITY: usize = 8 * 1024;
-pub(crate) const MAX_DRAIN_ACTIONS_PER_TURN: usize = 128;
-pub(crate) const MAX_DRAIN_BYTES_PER_TURN: usize = 1 << 20;
+pub(crate) const MAX_DRAIN_ACTIONS_PER_TURN: usize = 512;
+pub(crate) const MAX_DRAIN_BYTES_PER_TURN: usize = 4 << 20;
 pub(crate) const SUBSCRIPTION_SETTLE_DELAY: Duration = Duration::from_millis(50);
 
 /// An error returned by the Tokio runtime and socket adapters.

@@ -137,8 +137,8 @@ impl CelerityPeer {
             return Err(ProtocolError::PeerNotReady);
         }
 
-        for bytes in self.mechanism.encode_outbound(item)? {
-            self.output.push_back(ProtocolAction::Write(bytes));
+        for action in self.mechanism.encode_outbound(item)? {
+            self.output.push_back(action);
         }
 
         Ok(())
@@ -377,6 +377,19 @@ mod tests {
         }
     }
 
+    fn flatten_write(action: ProtocolAction) -> Bytes {
+        match action {
+            ProtocolAction::Write(bytes) => bytes,
+            ProtocolAction::WriteVectored { header, body } => {
+                let mut out = bytes::BytesMut::with_capacity(header.len() + body.len());
+                out.extend_from_slice(&header);
+                out.extend_from_slice(&body);
+                out.freeze()
+            }
+            ProtocolAction::Event(_) => panic!("expected write action, got event"),
+        }
+    }
+
     fn local_config(socket_type: SocketType, role: SecurityRole) -> PeerConfig {
         PeerConfig::new(socket_type, role, LinkScope::Local)
     }
@@ -405,7 +418,9 @@ mod tests {
             while let Some(action) = left.poll_output() {
                 progress = true;
                 match action {
-                    ProtocolAction::Write(bytes) => right.handle_input_bytes(bytes)?,
+                    ProtocolAction::Write(_) | ProtocolAction::WriteVectored { .. } => {
+                        right.handle_input_bytes(flatten_write(action))?
+                    }
                     ProtocolAction::Event(event) => events.push(event),
                 }
             }
@@ -413,7 +428,9 @@ mod tests {
             while let Some(action) = right.poll_output() {
                 progress = true;
                 match action {
-                    ProtocolAction::Write(bytes) => left.handle_input_bytes(bytes)?,
+                    ProtocolAction::Write(_) | ProtocolAction::WriteVectored { .. } => {
+                        left.handle_input_bytes(flatten_write(action))?
+                    }
                     ProtocolAction::Event(event) => events.push(event),
                 }
             }
@@ -428,10 +445,7 @@ mod tests {
         let mut server = CelerityPeer::new(local_config(SocketType::Rep, SecurityRole::Server));
         let _ = server.poll_output();
 
-        let greeting = match some(client.poll_output()) {
-            ProtocolAction::Write(bytes) => bytes,
-            ProtocolAction::Event(_) => unreachable!(),
-        };
+        let greeting = flatten_write(some(client.poll_output()));
 
         for byte in greeting.iter().copied().take(greeting.len() - 1) {
             ok(server.handle_input(&[byte]));
@@ -582,10 +596,7 @@ mod tests {
         let mut server = CelerityPeer::new(local_config(SocketType::Rep, SecurityRole::Server));
         let _ = server.poll_output();
 
-        let greeting = match some(client.poll_output()) {
-            ProtocolAction::Write(bytes) => bytes,
-            ProtocolAction::Event(_) => unreachable!(),
-        };
+        let greeting = flatten_write(some(client.poll_output()));
         ok(server.handle_input_bytes(greeting));
 
         let mut frames = ok(encode_message_frames(&[Bytes::from_static(b"oops")]));

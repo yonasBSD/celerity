@@ -640,6 +640,13 @@ pub enum PeerEvent {
 pub enum ProtocolAction {
     /// Bytes that should be written to the transport.
     Write(Bytes),
+    /// Header and body slices that should be written as one vectored frame.
+    WriteVectored {
+        /// The encoded ZMTP frame header.
+        header: Bytes,
+        /// The frame payload bytes.
+        body: Bytes,
+    },
     /// A synthesized protocol event for the caller.
     Event(PeerEvent),
 }
