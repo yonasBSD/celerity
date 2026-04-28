@@ -13,7 +13,7 @@ mod wire;
 use bytes::Bytes;
 use thiserror::Error;
 
-pub use pattern::{PatternAction, PubCore, RepCore, ReqCore, SubCore};
+pub use pattern::{PatternAction, PubCore, PullCore, PushCore, RepCore, ReqCore, SubCore};
 pub use peer::CelerityPeer;
 
 /// An ordered collection of message frames.

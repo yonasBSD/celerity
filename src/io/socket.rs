@@ -9,7 +9,8 @@ use tokio::task::JoinHandle;
 
 use crate::{
     HwmConfig, LinkScope, LocalAuthPolicy, Multipart, PatternAction, PeerConfig, PeerEvent,
-    PubCore, RepCore, ReqCore, SecurityConfig, SecurityRole, SocketType, SubCore,
+    PubCore, PullCore, PushCore, RepCore, ReqCore, SecurityConfig, SecurityRole, SocketType,
+    SubCore,
 };
 
 use super::runtime::{
@@ -17,8 +18,8 @@ use super::runtime::{
 };
 use super::transport::{AnyListener, bind_any_listener, connect_any_stream};
 use super::{
-    BindOptions, ConnectOptions, Endpoint, SUBSCRIPTION_SETTLE_DELAY, TokioCelerityError,
-    capacity_from_hwm,
+    BindOptions, ConnectOptions, DEFAULT_CHANNEL_CAPACITY, Endpoint, SUBSCRIPTION_SETTLE_DELAY,
+    TokioCelerityError, capacity_from_hwm,
 };
 
 /// A convenience wrapper for PUB semantics over Tokio transports.
@@ -262,6 +263,160 @@ impl SubSocket {
 
 /// A convenience wrapper for REQ semantics over Tokio transports.
 #[derive(Debug)]
+pub struct PushSocket {
+    command_tx: mpsc::Sender<PushCommand>,
+    task: JoinHandle<Result<(), TokioCelerityError>>,
+}
+
+impl PushSocket {
+    /// Connects a pusher to an endpoint.
+    ///
+    /// # Errors
+    ///
+    /// Returns endpoint parsing, connect, or local-authorization errors.
+    pub async fn connect(endpoint: &str) -> Result<Self, TokioCelerityError> {
+        let endpoint = Endpoint::parse(endpoint)?;
+        let (stream, transport) =
+            connect_any_stream(&endpoint, LocalAuthPolicy::FilesystemStrict).await?;
+        let config = PeerConfig::new(SocketType::Push, SecurityRole::Client, transport.link_scope);
+        let connection = TokioCelerity::from_stream(stream, transport, config)?;
+        let (command_tx, command_rx) =
+            mpsc::channel(capacity_from_hwm(HwmConfig::default().outbound_messages));
+        let task = tokio::spawn(async move { run_push_socket(connection, command_rx).await });
+
+        Ok(Self { command_tx, task })
+    }
+
+    /// Sends a message to the connected pull peer.
+    ///
+    /// # Errors
+    ///
+    /// Returns a runtime or protocol error if the send cannot be processed.
+    pub async fn send(&self, message: Multipart) -> Result<(), TokioCelerityError> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.command_tx
+            .send(PushCommand::Send(message, reply_tx))
+            .await
+            .map_err(|_| TokioCelerityError::ChannelClosed("push command channel"))?;
+        reply_rx
+            .await
+            .map_err(|_| TokioCelerityError::ChannelClosed("push command response channel"))?
+    }
+
+    /// Waits for the pusher task to finish.
+    ///
+    /// # Errors
+    ///
+    /// Returns the terminal runtime error if the task failed.
+    pub async fn join(self) -> Result<(), TokioCelerityError> {
+        self.task.await?
+    }
+}
+
+/// A convenience wrapper for PULL semantics over Tokio transports.
+#[derive(Debug)]
+pub struct PullSocket {
+    _command_tx: mpsc::Sender<PullCommand>,
+    message_rx: mpsc::Receiver<Result<Multipart, TokioCelerityError>>,
+    endpoint: Endpoint,
+    local_addr: Option<SocketAddr>,
+    task: JoinHandle<Result<(), TokioCelerityError>>,
+}
+
+impl PullSocket {
+    /// Binds a puller to an endpoint using default bind options.
+    ///
+    /// # Errors
+    ///
+    /// Returns endpoint parsing, binding, or local-authorization errors.
+    pub async fn bind(endpoint: &str) -> Result<Self, TokioCelerityError> {
+        Self::bind_with_options(endpoint, BindOptions::default()).await
+    }
+
+    /// Binds a puller to an endpoint with explicit bind options.
+    ///
+    /// # Errors
+    ///
+    /// Returns endpoint parsing, binding, or local-authorization errors.
+    pub async fn bind_with_options(
+        endpoint: &str,
+        bind_options: BindOptions,
+    ) -> Result<Self, TokioCelerityError> {
+        let endpoint = Endpoint::parse(endpoint)?;
+        let listener = bind_any_listener(
+            &endpoint,
+            bind_options,
+            SecurityConfig::default_for(LinkScope::Local).local_auth,
+        )
+        .await?;
+        let local_addr = listener.local_addr();
+        let bound_endpoint = listener.endpoint().clone();
+        let (command_tx, command_rx) = mpsc::channel(DEFAULT_CHANNEL_CAPACITY);
+        let (message_tx, message_rx) =
+            mpsc::channel(capacity_from_hwm(HwmConfig::default().inbound_messages));
+        let task =
+            tokio::spawn(async move { run_pull_socket(listener, command_rx, message_tx).await });
+
+        Ok(Self {
+            _command_tx: command_tx,
+            message_rx,
+            endpoint: bound_endpoint,
+            local_addr,
+            task,
+        })
+    }
+
+    /// Returns the bound endpoint.
+    #[must_use]
+    pub fn endpoint(&self) -> &Endpoint {
+        &self.endpoint
+    }
+
+    /// Returns the bound TCP socket address.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the puller is not bound on TCP.
+    #[must_use]
+    pub fn local_addr(&self) -> SocketAddr {
+        match self.local_addr {
+            Some(addr) => addr,
+            None => panic!("puller is not bound on TCP"),
+        }
+    }
+
+    /// Receives the next inbound message.
+    ///
+    /// # Errors
+    ///
+    /// Returns the terminal runtime error if the background task has ended.
+    pub async fn recv(&mut self) -> Result<Multipart, TokioCelerityError> {
+        match self.message_rx.recv().await {
+            Some(result) => result,
+            None => Err(self.join_on_closed_channel().await),
+        }
+    }
+
+    /// Waits for the puller task to finish.
+    ///
+    /// # Errors
+    ///
+    /// Returns the terminal runtime error if the task failed.
+    pub async fn join(self) -> Result<(), TokioCelerityError> {
+        self.task.await?
+    }
+
+    async fn join_on_closed_channel(&mut self) -> TokioCelerityError {
+        match (&mut self.task).await {
+            Ok(Ok(())) => TokioCelerityError::BackgroundTaskEnded,
+            Ok(Err(err)) => err,
+            Err(err) => TokioCelerityError::Join(err),
+        }
+    }
+}
+
+/// A convenience wrapper for REQ semantics over Tokio transports.
+#[derive(Debug)]
 pub struct ReqSocket {
     command_tx: mpsc::Sender<ReqCommand>,
     task: JoinHandle<Result<(), TokioCelerityError>>,
@@ -441,6 +596,14 @@ enum SubCommand {
     Subscribe(Bytes, oneshot::Sender<Result<(), TokioCelerityError>>),
     Cancel(Bytes, oneshot::Sender<Result<(), TokioCelerityError>>),
 }
+
+#[derive(Debug)]
+enum PushCommand {
+    Send(Multipart, oneshot::Sender<Result<(), TokioCelerityError>>),
+}
+
+#[derive(Debug)]
+enum PullCommand {}
 
 #[derive(Debug)]
 enum ReqCommand {
@@ -689,6 +852,103 @@ async fn drive_req_queue(
     }
 
     Ok(())
+}
+
+async fn run_push_socket(
+    mut connection: TokioCelerity,
+    mut command_rx: mpsc::Receiver<PushCommand>,
+) -> Result<(), TokioCelerityError> {
+    let peer = 0_u64;
+    let mut push_core = PushCore::new();
+    push_core.add_peer(peer);
+
+    let result = loop {
+        tokio::select! {
+            command = command_rx.recv() => {
+                match command {
+                    Some(PushCommand::Send(message, reply_tx)) => {
+                        let result = async {
+                            match push_core.send(message)? {
+                                PatternAction::Send { item, .. } => connection.send(item).await,
+                                PatternAction::Deliver { .. } => Ok(()),
+                            }
+                        }.await;
+                        let _ = reply_tx.send(result);
+                    }
+                    None => break Ok(()),
+                }
+            }
+            event = connection.recv() => {
+                match event {
+                    Some(_) => {}
+                    None => break connection.join().await,
+                }
+            }
+        }
+    };
+
+    if let Err(err) = &result {
+        while let Ok(PushCommand::Send(_, reply_tx)) = command_rx.try_recv() {
+            let _ = reply_tx.send(Err(background_error(err)));
+        }
+    }
+
+    result
+}
+
+async fn run_pull_socket(
+    listener: AnyListener,
+    mut command_rx: mpsc::Receiver<PullCommand>,
+    message_tx: mpsc::Sender<Result<Multipart, TokioCelerityError>>,
+) -> Result<(), TokioCelerityError> {
+    let (update_tx, mut update_rx) = mpsc::unbounded_channel();
+    let mut pull_core = PullCore::new();
+    let mut peers = HashMap::new();
+    let mut next_peer_id = 0_u64;
+
+    let result = loop {
+        tokio::select! {
+            accept = listener.accept() => {
+                let (stream, transport) = accept?;
+                let peer = next_peer_id;
+                next_peer_id = next_peer_id.wrapping_add(1);
+                let config = PeerConfig::new(SocketType::Pull, SecurityRole::Server, transport.link_scope);
+                let connection = TokioCelerity::from_stream(stream, transport, config)?;
+                let handle = spawn_peer_forwarder(peer, connection, update_tx.clone());
+                peers.insert(peer, handle);
+            }
+            command = command_rx.recv() => {
+                match command {
+                    Some(command) => match command {},
+                    None => break Ok(()),
+                }
+            }
+            update = update_rx.recv() => {
+                match update {
+                    Some(PeerUpdate::Event { peer, event }) => {
+                        for action in pull_core.on_peer_event(peer, event)? {
+                            if let PatternAction::Deliver { message, .. } = action {
+                                message_tx
+                                    .send(Ok(message))
+                                    .await
+                                    .map_err(|_| TokioCelerityError::ChannelClosed("pull message channel"))?;
+                            }
+                        }
+                    }
+                    Some(PeerUpdate::Closed { peer }) => {
+                        peers.remove(&peer);
+                    }
+                    None => break Ok(()),
+                }
+            }
+        }
+    };
+
+    if let Err(err) = &result {
+        let _ = message_tx.send(Err(background_error(err))).await;
+    }
+
+    result
 }
 
 async fn run_rep_socket(

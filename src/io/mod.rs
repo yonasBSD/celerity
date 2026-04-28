@@ -12,7 +12,7 @@ use thiserror::Error;
 
 pub use endpoint::{BindOptions, ConnectOptions, Endpoint, TransportKind, TransportMeta};
 pub use runtime::TokioCelerity;
-pub use socket::{PubSocket, RepSocket, ReqSocket, SubSocket};
+pub use socket::{PubSocket, PullSocket, PushSocket, RepSocket, ReqSocket, SubSocket};
 pub use transport::AnyStream;
 
 pub(crate) const DEFAULT_CHANNEL_CAPACITY: usize = 1;

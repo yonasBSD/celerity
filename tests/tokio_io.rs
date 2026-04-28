@@ -6,8 +6,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use bytes::Bytes;
 use celerity::io::{
-    PubSocket, RepSocket, ReqSocket, SubSocket, TokioCelerity, TokioCelerityError, TransportKind,
-    TransportMeta,
+    PubSocket, PullSocket, PushSocket, RepSocket, ReqSocket, SubSocket, TokioCelerity,
+    TokioCelerityError, TransportKind, TransportMeta,
 };
 #[cfg(feature = "curve")]
 use celerity::{CurveConfig, ProtocolError, SecurityConfig};
@@ -277,6 +277,18 @@ async fn wait_for_subscriber_times_out_when_no_subscribers_arrive() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn push_pull_roundtrip_over_tcp() {
+    let mut puller = ok(PullSocket::bind("127.0.0.1:0").await);
+    let endpoint = puller.local_addr().to_string();
+    let pusher = ok(PushSocket::connect(&endpoint).await);
+
+    ok(pusher.send(vec![Bytes::from_static(b"work-item")]).await);
+
+    let message = ok(ok(timeout(Duration::from_secs(1), puller.recv()).await));
+    assert_eq!(message, vec![Bytes::from_static(b"work-item")]);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn req_rep_roundtrip_over_tcp() {
     let mut responder = ok(RepSocket::bind("127.0.0.1:0").await);
     let endpoint = responder.local_addr().to_string();
@@ -368,6 +380,26 @@ async fn ipc_pub_sub_roundtrip_and_cleanup() {
         assert!(has_subscriber);
         ok(publisher.send(vec![Bytes::from_static(b"hello-ipc")]).await);
         let message = ok(ok(timeout(Duration::from_secs(1), subscriber.recv()).await));
+        assert_eq!(message, vec![Bytes::from_static(b"hello-ipc")]);
+    }
+
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(!path.exists(), "IPC socket file should be removed on drop");
+    let _ = std::fs::remove_dir_all(some(path.parent()));
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn ipc_push_pull_roundtrip_and_cleanup() {
+    let path = unique_ipc_path("push-pull");
+    let endpoint = format!("ipc://{}", path.display());
+    ok(std::fs::create_dir_all(some(path.parent())));
+
+    {
+        let mut puller = ok(PullSocket::bind(&endpoint).await);
+        let pusher = ok(PushSocket::connect(&endpoint).await);
+        ok(pusher.send(vec![Bytes::from_static(b"hello-ipc")]).await);
+        let message = ok(ok(timeout(Duration::from_secs(1), puller.recv()).await));
         assert_eq!(message, vec![Bytes::from_static(b"hello-ipc")]);
     }
 
