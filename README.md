@@ -140,6 +140,8 @@ Start `local_thr` first, then launch `remote_thr` in another terminal.
 
 They are intentionally simple so it is easy to line them up with libzmq-style throughput runs.
 
+For repeatable benchmarking notes and a small runner script, see [`perf/README.md`](perf/README.md).
+
 ## Local, IPC, and Remote Use
 
 ### Loopback TCP
