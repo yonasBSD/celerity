@@ -118,6 +118,24 @@ cargo run --all-features --bin cel-cat -- pub ipc:///tmp/celerity.sock hello fro
 cargo run --all-features --bin cel-cat -- pub 127.0.0.1:5555 hello there world
 ```
 
+## Throughput Benchmarks
+
+There are also small throughput helpers built around `PUSH/PULL`.
+
+Terminal 1:
+
+```bash
+cargo run --features tokio --bin local_thr -- tcp://127.0.0.1:5555 1024 100000
+```
+
+Terminal 2:
+
+```bash
+cargo run --features tokio --bin remote_thr -- tcp://127.0.0.1:5555 1024 100000
+```
+
+They are intentionally simple so it is easy to line them up with libzmq-style throughput runs.
+
 ## Local, IPC, and Remote Use
 
 ### Loopback TCP
@@ -142,7 +160,7 @@ Add the crate with the feature set you need:
 
 ```toml
 [dependencies]
-celerity = { version = "0.1.1", features = ["tokio", "ipc", "curve"] }
+celerity = { version = "0.2.0", features = ["tokio", "ipc", "curve"] }
 ```
 
 At the core is `CelerityPeer`, which owns protocol state but no sockets. The Tokio wrappers in `celerity::io` sit on top when you want real network transport.

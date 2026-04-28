@@ -1,6 +1,6 @@
 [package]
 name = "celerity"
-version = "0.1.1"
+version = "0.2.0"
 edition = "2024"
 authors = ["shemtorga@gmail.com", "okechshem75@gmail.com"]
 description = "Pure Rust sans-IO ZMTP 3.1 messaging core with Tokio TCP and Unix socket transports."
@@ -67,3 +67,13 @@ rustix = { version = "0.38", features = ["process"] }
 name = "cel-cat"
 path = "src/bin/cel_cat.rs"
 required-features = ["cli"]
+
+[[bin]]
+name = "local_thr"
+path = "src/bin/local_thr.rs"
+required-features = ["tokio"]
+
+[[bin]]
+name = "remote_thr"
+path = "src/bin/remote_thr.rs"
+required-features = ["tokio"]

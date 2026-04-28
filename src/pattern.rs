@@ -870,14 +870,16 @@ mod tests {
     fn pullcore_ignores_non_message_events() {
         let mut core = PullCore::<u8>::new();
 
-        assert!(ok(core.on_peer_event(
-            4,
-            PeerEvent::HandshakeComplete {
-                peer_socket_type: crate::SocketType::Push,
-                metadata: crate::MetadataMap::new(),
-            },
-        ))
-        .is_empty());
+        assert!(
+            ok(core.on_peer_event(
+                4,
+                PeerEvent::HandshakeComplete {
+                    peer_socket_type: crate::SocketType::Push,
+                    metadata: crate::MetadataMap::new(),
+                },
+            ))
+            .is_empty()
+        );
     }
 
     #[test]
