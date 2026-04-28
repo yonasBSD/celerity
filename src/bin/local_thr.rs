@@ -1,9 +1,13 @@
 //! Throughput receiver similar to libzmq's local/remote throughput tools.
 
+#[path = "support/perf_common.rs"]
+mod perf_common;
+
 use std::process::ExitCode;
 use std::time::Instant;
 
 use celerity::io::PullSocket;
+use perf_common::{format_elapsed, format_hundredths, parse_positive_usize, usage};
 
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> ExitCode {
@@ -19,12 +23,13 @@ async fn main() -> ExitCode {
 async fn run() -> Result<(), String> {
     let mut args = std::env::args();
     let program = args.next().unwrap_or_else(|| "local_thr".to_owned());
-    let endpoint = args.next().ok_or_else(|| usage(&program))?;
-    let message_size = parse_positive_usize(args.next(), "message_size", &program)?;
-    let message_count = parse_positive_usize(args.next(), "message_count", &program)?;
+    let usage_tail = "<endpoint> <message_size> <message_count>";
+    let endpoint = args.next().ok_or_else(|| usage(&program, usage_tail))?;
+    let message_size = parse_positive_usize(args.next(), "message_size", &program, usage_tail)?;
+    let message_count = parse_positive_usize(args.next(), "message_count", &program, usage_tail)?;
 
     if args.next().is_some() {
-        return Err(usage(&program));
+        return Err(usage(&program, usage_tail));
     }
 
     let mut socket = PullSocket::bind(&endpoint)
@@ -41,7 +46,7 @@ async fn run() -> Result<(), String> {
 
     // Mirror libzmq's throughput tool: wait for one warmup message, then time the steady-state run.
     let started = Instant::now();
-    for index in 1..message_count {
+    for index in 1..=message_count {
         let message = socket.recv().await.map_err(|err| err.to_string())?;
         let received_size: usize = message.iter().map(bytes::Bytes::len).sum();
         if received_size != message_size {
@@ -67,11 +72,7 @@ async fn run() -> Result<(), String> {
     println!("endpoint: {endpoint}");
     println!("message size: {message_size} bytes");
     println!("message count: {message_count}");
-    println!(
-        "elapsed: {}.{:06} s",
-        elapsed.as_secs(),
-        elapsed.subsec_micros()
-    );
+    println!("elapsed: {} s", format_elapsed(elapsed));
     println!(
         "throughput: {} msg/s",
         format_hundredths(messages_per_second),
@@ -82,23 +83,4 @@ async fn run() -> Result<(), String> {
     );
 
     Ok(())
-}
-
-fn parse_positive_usize(value: Option<String>, name: &str, program: &str) -> Result<usize, String> {
-    let value = value.ok_or_else(|| usage(program))?;
-    let parsed = value
-        .parse::<usize>()
-        .map_err(|_| format!("invalid {name}: {value}"))?;
-    if parsed == 0 {
-        return Err(format!("{name} must be greater than zero"));
-    }
-    Ok(parsed)
-}
-
-fn usage(program: &str) -> String {
-    format!("usage: {program} <endpoint> <message_size> <message_count>")
-}
-
-fn format_hundredths(value: u128) -> String {
-    format!("{}.{:02}", value / 100, value % 100)
 }

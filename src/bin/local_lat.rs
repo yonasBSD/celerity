@@ -1,9 +1,13 @@
 //! Latency responder similar to libzmq's local/remote latency tools.
 
+#[path = "support/perf_common.rs"]
+mod perf_common;
+
 use std::process::ExitCode;
 
 use bytes::Bytes;
 use celerity::io::RepSocket;
+use perf_common::{parse_positive_usize, usage};
 
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> ExitCode {
@@ -19,12 +23,14 @@ async fn main() -> ExitCode {
 async fn run() -> Result<(), String> {
     let mut args = std::env::args();
     let program = args.next().unwrap_or_else(|| "local_lat".to_owned());
-    let endpoint = args.next().ok_or_else(|| usage(&program))?;
-    let message_size = parse_positive_usize(args.next(), "message_size", &program)?;
-    let roundtrip_count = parse_positive_usize(args.next(), "roundtrip_count", &program)?;
+    let usage_tail = "<endpoint> <message_size> <roundtrip_count>";
+    let endpoint = args.next().ok_or_else(|| usage(&program, usage_tail))?;
+    let message_size = parse_positive_usize(args.next(), "message_size", &program, usage_tail)?;
+    let roundtrip_count =
+        parse_positive_usize(args.next(), "roundtrip_count", &program, usage_tail)?;
 
     if args.next().is_some() {
-        return Err(usage(&program));
+        return Err(usage(&program, usage_tail));
     }
 
     let mut socket = RepSocket::bind(&endpoint)
@@ -44,19 +50,4 @@ async fn run() -> Result<(), String> {
     }
 
     Ok(())
-}
-
-fn parse_positive_usize(value: Option<String>, name: &str, program: &str) -> Result<usize, String> {
-    let value = value.ok_or_else(|| usage(program))?;
-    let parsed = value
-        .parse::<usize>()
-        .map_err(|_| format!("invalid {name}: {value}"))?;
-    if parsed == 0 {
-        return Err(format!("{name} must be greater than zero"));
-    }
-    Ok(parsed)
-}
-
-fn usage(program: &str) -> String {
-    format!("usage: {program} <endpoint> <message_size> <roundtrip_count>")
 }

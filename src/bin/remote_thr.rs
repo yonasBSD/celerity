@@ -1,9 +1,13 @@
 //! Throughput sender similar to libzmq's local/remote throughput tools.
 
+#[path = "support/perf_common.rs"]
+mod perf_common;
+
 use std::process::ExitCode;
 
 use bytes::Bytes;
-use celerity::io::PushSocket;
+use celerity::io::{PushSocket, TokioCelerityError};
+use perf_common::{CONNECT_RETRY_DELAY, parse_positive_usize, usage};
 
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> ExitCode {
@@ -19,18 +23,23 @@ async fn main() -> ExitCode {
 async fn run() -> Result<(), String> {
     let mut args = std::env::args();
     let program = args.next().unwrap_or_else(|| "remote_thr".to_owned());
-    let endpoint = args.next().ok_or_else(|| usage(&program))?;
-    let message_size = parse_positive_usize(args.next(), "message_size", &program)?;
-    let message_count = parse_positive_usize(args.next(), "message_count", &program)?;
+    let usage_tail = "<endpoint> <message_size> <message_count>";
+    let endpoint = args.next().ok_or_else(|| usage(&program, usage_tail))?;
+    let message_size = parse_positive_usize(args.next(), "message_size", &program, usage_tail)?;
+    let message_count = parse_positive_usize(args.next(), "message_count", &program, usage_tail)?;
 
     if args.next().is_some() {
-        return Err(usage(&program));
+        return Err(usage(&program, usage_tail));
     }
 
-    let socket = PushSocket::connect(&endpoint)
+    let socket = connect_pusher(&endpoint).await?;
+    let payload = Bytes::from(vec![0_u8; message_size]);
+
+    // One warmup message lets the receiver start timing after the pipe is hot.
+    socket
+        .send(vec![payload.clone()])
         .await
         .map_err(|err| err.to_string())?;
-    let payload = Bytes::from(vec![0_u8; message_size]);
 
     for _ in 0..message_count {
         socket
@@ -42,17 +51,16 @@ async fn run() -> Result<(), String> {
     Ok(())
 }
 
-fn parse_positive_usize(value: Option<String>, name: &str, program: &str) -> Result<usize, String> {
-    let value = value.ok_or_else(|| usage(program))?;
-    let parsed = value
-        .parse::<usize>()
-        .map_err(|_| format!("invalid {name}: {value}"))?;
-    if parsed == 0 {
-        return Err(format!("{name} must be greater than zero"));
+async fn connect_pusher(endpoint: &str) -> Result<PushSocket, String> {
+    loop {
+        match PushSocket::connect(endpoint).await {
+            Ok(socket) => return Ok(socket),
+            Err(TokioCelerityError::Connect { source, .. })
+                if source.kind() == std::io::ErrorKind::ConnectionRefused =>
+            {
+                tokio::time::sleep(CONNECT_RETRY_DELAY).await;
+            }
+            Err(err) => return Err(err.to_string()),
+        }
     }
-    Ok(parsed)
-}
-
-fn usage(program: &str) -> String {
-    format!("usage: {program} <endpoint> <message_size> <message_count>")
 }
