@@ -30,26 +30,40 @@ Run the receiver first, then the sender.
 Use the same message count for each size unless you have a reason to change it.
 
 - `1`
+- `2`
+- `4`
+- `8`
+- `16`
+- `32`
 - `64`
+- `128`
 - `256`
+- `512`
 - `1024`
+- `2048`
 - `4096`
+- `8192`
+- `16384`
+- `32768`
 - `65536`
 
-A reasonable default message count is `100000`.
+The current defaults used in this repo are:
+
+- Throughput: `1000000` messages
+- Latency: `10000` round trips
 
 ## Celerity Throughput
 
 Terminal 1:
 
 ```bash
-cargo run --release --features tokio --bin local_thr -- tcp://127.0.0.1:5555 1024 100000
+cargo run --release --features tokio --bin local_thr -- tcp://127.0.0.1:5555 1024 1000000
 ```
 
 Terminal 2:
 
 ```bash
-cargo run --release --features tokio --bin remote_thr -- tcp://127.0.0.1:5555 1024 100000
+cargo run --release --features tokio --bin remote_thr -- tcp://127.0.0.1:5555 1024 1000000
 ```
 
 `local_thr` is the side that reports the benchmark result. `remote_thr` just pushes the traffic.
@@ -59,13 +73,13 @@ cargo run --release --features tokio --bin remote_thr -- tcp://127.0.0.1:5555 10
 Terminal 1:
 
 ```bash
-cargo run --release --features tokio --bin local_lat -- tcp://127.0.0.1:5555 1024 100000
+cargo run --release --features tokio --bin local_lat -- tcp://127.0.0.1:5555 1024 10000
 ```
 
 Terminal 2:
 
 ```bash
-cargo run --release --features tokio --bin remote_lat -- tcp://127.0.0.1:5555 1024 100000
+cargo run --release --features tokio --bin remote_lat -- tcp://127.0.0.1:5555 1024 10000
 ```
 
 `remote_lat` is the side that reports the benchmark result. It performs one warmup round trip and then times the remaining request/reply loop.
@@ -75,14 +89,54 @@ cargo run --release --features tokio --bin remote_lat -- tcp://127.0.0.1:5555 10
 Terminal 1:
 
 ```bash
-./perf/local_thr tcp://127.0.0.1:5555 1024 100000
+./perf/local_thr tcp://127.0.0.1:5555 1024 1000000
 ```
 
 Terminal 2:
 
 ```bash
-./perf/remote_thr tcp://127.0.0.1:5555 1024 100000
+./perf/remote_thr tcp://127.0.0.1:5555 1024 1000000
 ```
+
+## Current Baseline
+
+The tables below record the current matched-count loopback comparison between:
+
+- Celerity from this repo
+- libzmq built locally
+
+These results were collected with:
+
+- Throughput: `COUNT=1000000 ./perf/run_thr.sh`
+- Latency: `COUNT=10000 ./perf/run_lat.sh`
+- Matching libzmq perf binaries with the same endpoint, sizes, and counts
+
+The tables below show the key comparison sizes used for quick baseline checks.
+
+### Latency Baseline
+
+| Size | libzmq | Celerity | Gap |
+| --- | ---: | ---: | ---: |
+| 1B | 58.96 us | 103.73 us | 1.76x |
+| 64B | 53.62 us | 88.36 us | 1.65x |
+| 1KB | 56.14 us | 98.83 us | 1.76x |
+| 64KB | 140.83 us | 197.30 us | 1.40x |
+
+### Throughput Baseline
+
+| Size | libzmq | Celerity | Gap |
+| --- | ---: | ---: | ---: |
+| 1B | 4,393,364 msg/s | 865,874 msg/s | 5.07x |
+| 64B | 3,564,719 msg/s | 787,369 msg/s | 4.53x |
+| 1KB | 896,963 msg/s | 738,564 msg/s | 1.21x |
+| 4KB | 247,479 msg/s | 411,541 msg/s | Celerity 1.66x faster |
+| 64KB | 11,619 msg/s | 23,519 msg/s | Celerity 2.02x faster |
+
+Notes:
+
+- Small-message throughput is still where libzmq leads most clearly.
+- At `4KB` and `64KB`, the current Celerity transport path is faster than the local libzmq build on this machine.
+- These numbers are machine-specific and should be treated as a baseline, not a guarantee.
 
 ## Suggested Method
 
@@ -118,10 +172,22 @@ There is a helper script in this directory:
 ./perf/run_thr.sh
 ```
 
-It runs the Celerity throughput pair for the default size grid and prints a compact summary.
+It runs the Celerity throughput pair for the default size grid, prints a compact summary, and writes:
+
+```text
+perf/celerity_thr_results.csv
+```
 
 There is also a latency runner:
 
 ```bash
 ./perf/run_lat.sh
 ```
+
+It prints the latency summary and writes:
+
+```text
+perf/celerity_lat_results.csv
+```
+
+Both scripts accept `CSV_PATH=...` if you want to override the output location.
