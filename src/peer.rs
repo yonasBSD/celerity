@@ -419,7 +419,7 @@ mod tests {
                 progress = true;
                 match action {
                     ProtocolAction::Write(_) | ProtocolAction::WriteVectored { .. } => {
-                        right.handle_input_bytes(flatten_write(action))?
+                        right.handle_input_bytes(flatten_write(action))?;
                     }
                     ProtocolAction::Event(event) => events.push(event),
                 }
@@ -429,7 +429,7 @@ mod tests {
                 progress = true;
                 match action {
                     ProtocolAction::Write(_) | ProtocolAction::WriteVectored { .. } => {
-                        left.handle_input_bytes(flatten_write(action))?
+                        left.handle_input_bytes(flatten_write(action))?;
                     }
                     ProtocolAction::Event(event) => events.push(event),
                 }

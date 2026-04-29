@@ -237,32 +237,21 @@ async fn run_tokio_peer(
             command = command_rx.recv(), if ready_for_traffic || can_take_command(hwm, pending.len(), pending_bytes) => {
                 match command {
                     Some(command) => {
-                        handle_runtime_command(
-                            &mut peer,
-                            hwm,
-                            &mut pending,
-                            &mut pending_bytes,
-                            &mut pending_flushes,
+                        let mut ctx = CommandContext {
+                            pending: &mut pending,
+                            pending_bytes: &mut pending_bytes,
+                            pending_flushes: &mut pending_flushes,
                             ready_for_traffic,
-                            &mut needs_drain,
-                            command,
-                        )?;
+                            needs_drain: &mut needs_drain,
+                        };
+                        handle_runtime_command(&mut peer, hwm, &mut ctx, command)?;
 
                         for _ in 1..MAX_COMMANDS_PER_TURN {
                             let Ok(command) = command_rx.try_recv() else {
                                 break;
                             };
 
-                            handle_runtime_command(
-                                &mut peer,
-                                hwm,
-                                &mut pending,
-                                &mut pending_bytes,
-                                &mut pending_flushes,
-                                ready_for_traffic,
-                                &mut needs_drain,
-                                command,
-                            )?;
+                            handle_runtime_command(&mut peer, hwm, &mut ctx, command)?;
                         }
                     }
                     None => return Ok(()),
@@ -309,42 +298,46 @@ fn submit_runtime_item(
     Ok(())
 }
 
+struct CommandContext<'a> {
+    pending: &'a mut VecDeque<QueuedOutbound>,
+    pending_bytes: &'a mut usize,
+    pending_flushes: &'a mut Vec<oneshot::Sender<Result<(), TokioCelerityError>>>,
+    ready_for_traffic: bool,
+    needs_drain: &'a mut bool,
+}
+
 fn handle_runtime_command(
     peer: &mut CelerityPeer,
     hwm: HwmConfig,
-    pending: &mut VecDeque<QueuedOutbound>,
-    pending_bytes: &mut usize,
-    pending_flushes: &mut Vec<oneshot::Sender<Result<(), TokioCelerityError>>>,
-    ready_for_traffic: bool,
-    needs_drain: &mut bool,
+    ctx: &mut CommandContext<'_>,
     command: RuntimeCommand,
 ) -> Result<(), TokioCelerityError> {
     match command {
         RuntimeCommand::Submit(item) => submit_runtime_item(
             peer,
             hwm,
-            pending,
-            pending_bytes,
-            ready_for_traffic,
-            needs_drain,
+            ctx.pending,
+            ctx.pending_bytes,
+            ctx.ready_for_traffic,
+            ctx.needs_drain,
             item,
         ),
         RuntimeCommand::SubmitSync(item, ack) => {
             let result = submit_runtime_item(
                 peer,
                 hwm,
-                pending,
-                pending_bytes,
-                ready_for_traffic,
-                needs_drain,
+                ctx.pending,
+                ctx.pending_bytes,
+                ctx.ready_for_traffic,
+                ctx.needs_drain,
                 item,
             );
             let _ = ack.send(result);
             Ok(())
         }
         RuntimeCommand::Flush(ack) => {
-            pending_flushes.push(ack);
-            *needs_drain = true;
+            ctx.pending_flushes.push(ack);
+            *ctx.needs_drain = true;
             Ok(())
         }
     }

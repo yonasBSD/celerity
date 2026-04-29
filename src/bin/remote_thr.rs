@@ -75,8 +75,10 @@ async fn connect_pusher(endpoint: &str) -> Result<PushSocket, String> {
 async fn flush_sender(socket: &PushSocket) -> Result<(), String> {
     match socket.flush().await {
         Ok(())
-        | Err(TokioCelerityError::BackgroundTaskEnded)
-        | Err(TokioCelerityError::ChannelClosed("connection task")) => Ok(()),
+        | Err(
+            TokioCelerityError::BackgroundTaskEnded
+            | TokioCelerityError::ChannelClosed("connection task"),
+        ) => Ok(()),
         Err(err) => Err(err.to_string()),
     }
 }
