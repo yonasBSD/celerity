@@ -36,7 +36,10 @@ pub(crate) trait MechanismDriver {
         output: &mut VecDeque<ProtocolAction>,
     ) -> Result<Option<HandshakeComplete>, ProtocolError>;
 
-    fn encode_outbound(&mut self, item: &OutboundItem) -> Result<Vec<ProtocolAction>, ProtocolError>;
+    fn encode_outbound(
+        &mut self,
+        item: &OutboundItem,
+    ) -> Result<Vec<ProtocolAction>, ProtocolError>;
 
     fn decode_message(&mut self, payload: Bytes) -> Result<Bytes, ProtocolError>;
 }

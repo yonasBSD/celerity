@@ -695,8 +695,7 @@ async fn dispatch_pub_message(
             && let Some(handle) = peers.get(&peer)
         {
             // PUB fanout is best-effort; a full peer queue does not stall everyone else.
-            match try_send_runtime_command_sync(&handle.command_tx, &handle.terminal_rx, item)
-                .await
+            match try_send_runtime_command_sync(&handle.command_tx, &handle.terminal_rx, item).await
             {
                 Ok(())
                 | Err(

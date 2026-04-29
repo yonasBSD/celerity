@@ -203,9 +203,9 @@ impl MechanismDriver for CurveMechanism {
             let raw_frames = encode_outbound_item(item)?;
             let plaintext = encode_raw_frames(&raw_frames);
             let payload = seal_message(channel, &plaintext)?;
-            Ok(vec![ProtocolAction::Write(encode_command(Command::Message(
-                payload,
-            ))?)])
+            Ok(vec![ProtocolAction::Write(encode_command(
+                Command::Message(payload),
+            )?)])
         }
     }
 
